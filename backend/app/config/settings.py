@@ -9,7 +9,7 @@ class Settings(BaseSettings):
         "postgresql://user:password@localhost:5432/avis_db"
     )
 
-    SECRET_KEY: str = "REPLACE_ME"
+    SECRET_KEY: str = ""
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 30
     ALGORITHM: str = "HS256"
 
