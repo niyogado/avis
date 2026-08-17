@@ -1,0 +1,1 @@
+"""AVIS backend application package."""

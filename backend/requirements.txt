@@ -5,6 +5,6 @@ asyncpg
 alembic
 passlib[bcrypt]
 python-jose
-pydantic
+pydantic>=2.0
 pytest
 pytest-asyncio
