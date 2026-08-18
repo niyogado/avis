@@ -3,6 +3,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.repositories.user import UserRepository
 from app.utils.security import hash_password
 from app.schemas.auth import UserCreate
+from app.utils.security import verify_password
+
+
 
 
 class AuthService:
@@ -26,4 +29,12 @@ class AuthService:
         username=user_in.username,
         phone=user_in.phone,
          )
+        return user
+
+    async def authenticate_user(self, email: str, password: str):
+        user = await self.repo.get_by_email(email)
+        if not user:
+            return None
+        if not verify_password(password, user.hashed_password):
+            return None
         return user

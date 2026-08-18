@@ -13,6 +13,11 @@ class UserRepository:
         result = await self.session.execute(q)
         return result.scalars().first()
 
+    async def get_by_id(self, id_):
+        q = select(User).where(User.id == id_)
+        result = await self.session.execute(q)
+        return result.scalars().first()
+
     async def create(
         self,
         email: str,

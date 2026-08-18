@@ -3,7 +3,9 @@ from typing import Optional
 from uuid import UUID
 from datetime import datetime
 
-
+class userLogin(BaseModel):
+    email:EmailStr
+    password:str
 class UserCreate(BaseModel):
     email: EmailStr
     password: str
@@ -24,3 +26,10 @@ class UserOut(BaseModel):
 
     class Config:
         orm_mode = True
+
+
+
+class Token(BaseModel):
+    access_token: str
+    token_type: str = "bearer"
+
