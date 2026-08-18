@@ -16,6 +16,7 @@ class Settings(BaseSettings):
     BACKEND_CORS_ORIGINS: List[str] = [
         "http://localhost:3000"
     ]
+    UPLOAD_DIR: str = "uploads"
 
     model_config = SettingsConfigDict(
         env_file=".env",
