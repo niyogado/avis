@@ -17,6 +17,20 @@ class Settings(BaseSettings):
         "http://localhost:3000"
     ]
     UPLOAD_DIR: str = "uploads"
+    # S3 / object storage settings (optional)
+    S3_ENABLED: bool = False
+    S3_BUCKET: str = ""
+    S3_REGION: str = ""
+    S3_ACCESS_KEY: str = ""
+    S3_SECRET_KEY: str = ""
+
+    # Upload validation
+    MAX_UPLOAD_SIZE: int = 5_000_000  # bytes (5 MB)
+    ALLOWED_UPLOAD_TYPES: list[str] = [
+        "application/pdf",
+        "application/msword",
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    ]
 
     model_config = SettingsConfigDict(
         env_file=".env",

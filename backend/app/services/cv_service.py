@@ -3,20 +3,23 @@ from pathlib import Path
 from fastapi import UploadFile
 from app.config.settings import settings
 from app.repositories.cv import CVRepository
+from app.utils.storage import Storage
+from io import BytesIO
 
 
 class CVService:
     def __init__(self, db):
         self.repo = CVRepository(db)
         Path(settings.UPLOAD_DIR).mkdir(parents=True, exist_ok=True)
+        self.storage = Storage()
 
-    async def save_cv(self, user_id, upload: UploadFile):
-        filename = upload.filename
-        dest_path = os.path.join(settings.UPLOAD_DIR, f"{user_id}_{filename}")
-        with open(dest_path, "wb") as f:
-            content = await upload.read()
-            f.write(content)
+    async def save_cv(self, user_id, filename: str, content: bytes, content_type: str | None = None):
         size = str(len(content))
-        content_type = upload.content_type
-        cv = await self.repo.create(user_id=user_id, filename=filename, path=dest_path, content_type=content_type, size=size)
+
+        # Use BytesIO for storage adapter which expects file-like
+        fileobj = BytesIO(content)
+        dest_name = f"{user_id}_{filename}"
+        path_or_url = self.storage.save(fileobj, dest_name, content_type=content_type)
+
+        cv = await self.repo.create(user_id=user_id, filename=filename, path=path_or_url, content_type=content_type, size=size)
         return cv
