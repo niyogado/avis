@@ -1,0 +1,29 @@
+@import "tailwindcss/base";
+@import "tailwindcss/components";
+@import "tailwindcss/utilities";
+
+html, body, #root {
+  height: 100%;
+}
+
+body.dark {
+  background-color: #0E0E0C;
+  color: #F3F1E9;
+}
+
+.sidebar {
+  width: 260px;
+  background: #191915;
+  color: #F3F1E9;
+  border-right: 1px solid rgba(243, 241, 233, 0.12);
+}
+
+.panel {
+  background: #191915;
+  border: 1px solid rgba(243, 241, 233, 0.12);
+}
+
+.accent {
+  background: #D96A1C;
+  color: #fff;
+}

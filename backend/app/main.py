@@ -1,7 +1,5 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi import Depends
-from fastapi.routing import APIRouter
 
 from app.config.settings import settings
 from app.routes import auth as auth_router
@@ -11,14 +9,25 @@ from ai.router import router as ai_router
 
 app = FastAPI(title=settings.APP_NAME, version="0.1.0")
 
+# Define allowed origins
+allowed_origins = [
+    "http://localhost:5173",
+    "http://localhost:3000",
+    "http://127.0.0.1:5173",
+    "http://127.0.0.1:3000",
+]
+
+# Include origins from settings if present
+if hasattr(settings, "BACKEND_CORS_ORIGINS") and settings.BACKEND_CORS_ORIGINS:
+    allowed_origins.extend([str(origin) for origin in settings.BACKEND_CORS_ORIGINS])
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[str(origin) for origin in settings.BACKEND_CORS_ORIGINS],
+    allow_origins=allowed_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
 
 app.include_router(auth_router.router, prefix="/api/auth", tags=["auth"])
 app.include_router(profile_router.router, prefix="/api", tags=["profile"])
