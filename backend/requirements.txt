@@ -9,3 +9,8 @@ pydantic>=2.0
 pytest
 pytest-asyncio
 boto3
+requests
+python-dotenv
+email-validator
+pwdlib[argon2]
+python-multipart
