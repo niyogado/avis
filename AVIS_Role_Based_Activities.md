@@ -20,14 +20,14 @@
 - Connect React to FastAPI APIs.
 - Handle loading, error, and empty states.
 
-## 4. UWINGABIRE Laila — Core Backend
+## 4. NiYOGiSUBiZO Gad— Core Backend
 - Build the Python + FastAPI structure.
 - Design the PostgreSQL database.
 - Implement authentication.
 - Build Profile and CV APIs.
 - Implement validation and security.
 
-## 5. NiYOGiSUBiZO Gad — AI & Career Backend
+## 5. UWINGABIRE Laila — AI & Career Backend
 - Implement CV analysis and AI knowledge.
 - Build Training and Chat APIs.
 - Implement AI job matching.
