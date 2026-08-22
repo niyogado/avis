@@ -1,5 +1,5 @@
 import uuid
-from sqlalchemy import Column, String, ForeignKey, DateTime
+from sqlalchemy import Column, String, ForeignKey, DateTime, Text, JSON
 from sqlalchemy.dialects.postgresql import UUID as PG_UUID
 from sqlalchemy.sql import func
 
@@ -15,4 +15,9 @@ class CV(Base):
     content_type = Column(String(128), nullable=True)
     size = Column(String(64), nullable=True)
     path = Column(String(2048), nullable=False)
+    extracted_text = Column(Text, nullable=True)
+    analysis_json = Column(JSON, nullable=True)
+    analysis_status = Column(String(32), nullable=True)
+    analysis_error = Column(Text, nullable=True)
+    analyzed_at = Column(DateTime(timezone=True), nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)

@@ -1,14 +1,20 @@
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 from typing import Optional
 from uuid import UUID
 from datetime import datetime
 
 
 class ProfileBase(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    first_name: Optional[str] = None
+    last_name: Optional[str] = None
     full_name: Optional[str] = None
     headline: Optional[str] = None
     summary: Optional[str] = None
     location: Optional[str] = None
+    phone: Optional[str] = None
+    avatar_url: Optional[str] = None
 
 
 class ProfileCreate(ProfileBase):
@@ -25,5 +31,4 @@ class ProfileOut(ProfileBase):
     created_at: datetime
     updated_at: datetime
 
-    class Config:
-        orm_mode = True
+    model_config = ConfigDict(from_attributes=True, extra="forbid")

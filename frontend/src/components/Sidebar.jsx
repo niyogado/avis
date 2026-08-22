@@ -1,69 +1,61 @@
 import React from 'react'
 import { NavLink, Link } from 'react-router-dom'
+import { Bell, BookOpen, Brain, BriefcaseBusiness, Compass, FileText, Fingerprint, GraduationCap, LayoutDashboard, MessageCircle, PenLine, Send, Settings as SettingsIcon, User } from 'lucide-react'
 import { useAuth } from '../contexts/AuthContext'
 
-// Explicitly map label to actual React Router paths
 const navItems = [
-  { label: 'Overview', path: '/' },
-  { label: 'My Profile', path: '/profile' },
-  { label: 'My CV', path: '/cv' },
-  { label: 'CV Writer', path: '/cv-writer' },
-  { label: 'Training', path: '/training' },
-  { label: 'Chat', path: '/chat' },
-  { label: 'Career Applications', path: '/career-applications' },
-  { label: 'Job Alerts', path: '/job-alerts' },
-  { label: 'Settings', path: '/settings' },
+  { label: 'Overview', path: '/', icon: LayoutDashboard },
+  { label: 'Identity', path: '/identity', icon: Fingerprint },
+  { label: 'CV', path: '/cv', icon: FileText },
+  { label: 'Training', path: '/training', icon: GraduationCap },
+  { label: 'Knowledge', path: '/knowledge', icon: Brain },
+  { label: 'Chat', path: '/chat', icon: MessageCircle },
+  { label: 'CV Writer', path: '/cv-writer', icon: PenLine },
+  { label: 'Career Intelligence', path: '/career/intelligence', icon: Compass },
+  { label: 'Opportunities', path: '/opportunities', icon: BriefcaseBusiness },
+  { label: 'Applications', path: '/career/applications', icon: Send },
+  { label: 'Job Alerts', path: '/job-alerts', icon: Bell },
+  { label: 'Learning', path: '/learning', icon: BookOpen },
+  { label: 'Settings', path: '/settings', icon: SettingsIcon },
 ]
 
 export default function Sidebar() {
   const { user, logout } = useAuth()
 
   return (
-    <div className="p-6 flex flex-col h-full justify-between">
-      <div>
-        <h2 className="text-2xl font-bold mb-6">AVIS</h2>
-        <nav className="flex flex-col gap-2">
-          {navItems.map((item) => (
+    <div className="sidebar-shell">
+      <div className="nav-group">
+        <nav className="nav-list">
+          {navItems.map(({ label, path, icon: Icon }) => (
             <NavLink
-              key={item.label}
-              to={item.path}
-              className={({ isActive }) =>
-                `block px-3 py-2 rounded transition-colors ${
-                  isActive ? 'bg-[#D96A1C] text-white' : 'hover:bg-[rgba(243,241,233,0.05)]'
-                }`
-              }
+              key={label}
+              to={path}
+              className={({ isActive }) => `nav-item ${isActive ? 'active' : ''}`}
             >
-              {item.label}
+              <span className="nav-icon"><Icon size={16} /></span>
+              <span>{label}</span>
             </NavLink>
           ))}
         </nav>
       </div>
 
-      <div className="text-sm">
-        <div className="mb-3 flex items-center gap-2">
-          <button className="px-3 py-2 rounded bg-[#D96A1C] text-white">Dark</button>
-        </div>
-
+      <div className="sidebar-footer">
         {user ? (
-          <div className="text-xs text-[#F3F1E9]">
-            <Link to="/profile" className="block font-medium hover:underline mb-1">
-              {user.full_name || `${user.first_name || ''} ${user.last_name || ''}`.trim() || user.email || 'You'}
+          <>
+            <Link to="/" className="profile-link">
+              <span className="nav-icon"><LayoutDashboard size={16} /></span>
+              <span>Dashboard</span>
             </Link>
-            <button 
-              onClick={logout} 
-              className="mt-1 text-sm text-[rgba(243,241,233,0.6)] hover:text-white transition-colors"
-            >
-              Logout
-            </button>
-          </div>
+            <Link to="/profile" className="profile-link">
+              <span className="nav-icon"><User size={16} /></span>
+              <span>{user.full_name || user.email || 'Profile'}</span>
+            </Link>
+            <button type="button" onClick={logout} className="logout-button">Logout</button>
+          </>
         ) : (
-          <div className="text-xs text-[#F3F1E9]">
-            <Link to="/login" className="block mb-1 text-[rgba(243,241,233,0.8)] hover:text-white">
-              Sign in
-            </Link>
-            <Link to="/register" className="block text-[rgba(243,241,233,0.6)] hover:text-white">
-              Create account
-            </Link>
+          <div className="auth-links">
+            <Link to="/login">Sign in</Link>
+            <Link to="/register">Create account</Link>
           </div>
         )}
       </div>

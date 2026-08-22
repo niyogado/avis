@@ -11,9 +11,13 @@ class Profile(Base):
 
     id = Column(PG_UUID(as_uuid=True), primary_key=True, default=uuid.uuid4, unique=True, nullable=False)
     user_id = Column(PG_UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    first_name = Column(String(100), nullable=True)
+    last_name = Column(String(100), nullable=True)
     full_name = Column(String(255), nullable=True)
     headline = Column(String(255), nullable=True)
     summary = Column(String, nullable=True)
     location = Column(String(255), nullable=True)
+    phone = Column(String(30), nullable=True)
+    avatar_url = Column(String(2048), nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)
