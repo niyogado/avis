@@ -5,12 +5,12 @@ export default function Settings() {
   const { user, token } = useAuth()
 
   const settings = [
-    { label: 'AI recommendations', value: 'Enabled' },
-    { label: 'Profile visibility', value: 'Private' },
-    { label: 'Notifications', value: 'Daily digest' },
-    { label: 'Theme', value: 'Light mode' },
-    { label: 'Account', value: user?.email || 'Not signed in' },
+    { label: 'Account', value: user?.email || user?.full_name || 'Not signed in' },
     { label: 'Authentication', value: token ? 'Authenticated' : 'Logged out' },
+    { label: 'AI recommendations', value: 'Uses your CV, training notes, and confirmed intent' },
+    { label: 'Job search provider', value: 'Not configured' },
+    { label: 'Notification preferences', value: 'Not configurable yet' },
+    { label: 'Theme', value: 'Uses the current AVIS professional theme' },
   ]
 
   return (

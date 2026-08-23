@@ -8,13 +8,11 @@ import MyCV from './views/MyCV'
 import CVWriter from './views/CVWriter'
 import Training from './views/Training'
 import Chat from './views/Chat'
-import CareerApplications from './views/CareerApplications'
-import JobAlerts from './views/JobAlerts'
+import CareerHub from './views/CareerHub'
 import Settings from './views/Settings'
 import Login from './views/Login'
 import Register from './views/Register'
 import CareerIntelligence from './views/CareerIntelligence'
-import Opportunities from './views/Opportunities'
 import Learning from './views/Learning'
 import Knowledge from './views/Knowledge'
 import { AuthProvider } from './contexts/AuthContext'
@@ -32,14 +30,16 @@ export default function App() {
           <Route path="/training" element={<Training />} />
           <Route path="/chat" element={<Chat />} />
           <Route path="/career/intelligence" element={<CareerIntelligence />} />
-          <Route path="/opportunities" element={<Opportunities />} />
+          <Route path="/career" element={<CareerHub />} />
           <Route path="/knowledge" element={<Knowledge />} />
-          <Route path="/career/applications" element={<CareerApplications />} />
-          <Route path="/job-alerts" element={<JobAlerts />} />
           <Route path="/learning" element={<Learning />} />
           <Route path="/settings" element={<Settings />} />
           <Route path="/login" element={<Login />} />
           <Route path="/register" element={<Register />} />
+          {/* Legacy Career Hub paths — redirect into the unified /career hub. */}
+          <Route path="/opportunities" element={<Navigate to="/career" replace />} />
+          <Route path="/career/applications" element={<Navigate to="/career" replace />} />
+          <Route path="/job-alerts" element={<Navigate to="/career" replace />} />
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
       </Layout>

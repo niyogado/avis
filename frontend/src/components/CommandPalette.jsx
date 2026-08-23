@@ -7,9 +7,9 @@ const commands = [
   { label: 'Start training', icon: GraduationCap, path: '/training' },
   { label: 'Upload CV', icon: FileText, path: '/cv' },
   { label: 'Open Chat', icon: MessageCircle, path: '/chat' },
-  { label: 'Find opportunities', icon: Compass, path: '/opportunities' },
+  { label: 'Find opportunities', icon: Compass, path: '/career' },
   { label: 'Create CV', icon: Sparkles, path: '/cv-writer' },
-  { label: 'View applications', icon: Send, path: '/career-applications' },
+  { label: 'View applications', icon: Send, path: '/career' },
   { label: 'Review learning', icon: BookOpen, path: '/learning' },
 ]
 

@@ -1,6 +1,6 @@
 import React from 'react'
 import { NavLink, Link } from 'react-router-dom'
-import { Bell, BookOpen, Brain, BriefcaseBusiness, Compass, FileText, Fingerprint, GraduationCap, LayoutDashboard, MessageCircle, PenLine, Send, Settings as SettingsIcon, User } from 'lucide-react'
+import { BookOpen, Brain, BriefcaseBusiness, Compass, FileText, Fingerprint, GraduationCap, LayoutDashboard, MessageCircle, PenLine, Settings as SettingsIcon, User } from 'lucide-react'
 import { useAuth } from '../contexts/AuthContext'
 
 const navItems = [
@@ -12,9 +12,7 @@ const navItems = [
   { label: 'Chat', path: '/chat', icon: MessageCircle },
   { label: 'CV Writer', path: '/cv-writer', icon: PenLine },
   { label: 'Career Intelligence', path: '/career/intelligence', icon: Compass },
-  { label: 'Opportunities', path: '/opportunities', icon: BriefcaseBusiness },
-  { label: 'Applications', path: '/career/applications', icon: Send },
-  { label: 'Job Alerts', path: '/job-alerts', icon: Bell },
+  { label: 'Career Hub', path: '/career', icon: BriefcaseBusiness, end: true },
   { label: 'Learning', path: '/learning', icon: BookOpen },
   { label: 'Settings', path: '/settings', icon: SettingsIcon },
 ]
@@ -26,10 +24,11 @@ export default function Sidebar() {
     <div className="sidebar-shell">
       <div className="nav-group">
         <nav className="nav-list">
-          {navItems.map(({ label, path, icon: Icon }) => (
+          {navItems.map(({ label, path, icon: Icon, end }) => (
             <NavLink
               key={label}
               to={path}
+              end={end === true}
               className={({ isActive }) => `nav-item ${isActive ? 'active' : ''}`}
             >
               <span className="nav-icon"><Icon size={16} /></span>

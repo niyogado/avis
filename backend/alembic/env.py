@@ -15,12 +15,16 @@ from app.database.base import Base
 
 # Import models so Alembic can detect them
 from app.models.user import User  # noqa: F401
+from app.models.profile import Profile  # noqa: F401
 from app.models.cv import CV  # noqa: F401
 from app.models.ai_training import AITraining  # noqa: F401
 from app.models.ai_chat_session import AIChatSession  # noqa: F401
 from app.models.ai_chat_message import AIChatMessage  # noqa: F401
 from app.models.ai_profile_update import AIProfileUpdate  # noqa: F401
 from app.models.ai_memory import AIMemory  # noqa: F401
+from app.models.application import Application  # noqa: F401
+from app.models.job_alert import JobAlert  # noqa: F401
+from app.models.user_settings import UserSettings  # noqa: F401
 
 
 config = context.config

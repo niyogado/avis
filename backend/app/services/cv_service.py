@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any
 from xml.etree import ElementTree as ET
 
+import requests
 from fastapi import UploadFile
 
 from app.config.settings import settings
@@ -74,11 +75,14 @@ def _extract_document_text(filename: str, content: bytes, content_type: str | No
     lower_name = (filename or '').lower()
     media_type = (content_type or '').lower()
 
+    if not content:
+        raise ValueError("The uploaded CV file is empty.")
+
     if media_type.startswith('text/') or lower_name.endswith('.txt'):
         try:
             return content.decode('utf-8')
         except UnicodeDecodeError:
-            return content.decode('latin-1', errors='ignore')
+            return content.decode('latin-1', errors='replace')
 
     if lower_name.endswith('.docx') or media_type.endswith('wordprocessingml.document'):
         try:
@@ -91,23 +95,20 @@ def _extract_document_text(filename: str, content: bytes, content_type: str | No
                 for para in root.findall('.//w:p', ns)
             ]
             return '\n'.join(p for p in paragraphs if p.strip())
-        except Exception:
-            return content.decode('latin-1', errors='ignore')
+        except Exception as exc:
+            raise ValueError("AVIS could not read this DOCX file. Upload a valid Word document.") from exc
 
     if lower_name.endswith('.pdf') or media_type == 'application/pdf':
-        if PdfReader is not None:
-            try:
-                reader = PdfReader(BytesIO(content))
-                pages = []
-                for page in reader.pages:
-                    page_text = page.extract_text() or ''
-                    pages.append(page_text)
-                return '\n'.join(pages)
-            except Exception:
-                pass
-        return content.decode('latin-1', errors='ignore')
+        if PdfReader is None:
+            raise ValueError("PDF extraction is unavailable on this server.")
+        try:
+            reader = PdfReader(BytesIO(content))
+            pages = [(page.extract_text() or '') for page in reader.pages]
+            return '\n'.join(pages)
+        except Exception as exc:
+            raise ValueError("AVIS could not extract readable text from this PDF. Try a text-based PDF.") from exc
 
-    return content.decode('utf-8', errors='ignore')
+    raise ValueError("Unsupported CV format. Upload a PDF or DOCX file.")
 
 
 def _ensure_extracted_text(filename: str, content: bytes, content_type: str | None = None) -> str:
@@ -140,6 +141,36 @@ def _unique_strings(items: Any, limit: int = 25) -> list[str]:
     return result
 
 
+def _repair_truncated_json(raw: str) -> str:
+    """Attempt to salvage a JSON object that was truncated mid-stream.
+
+    Avis truncates long generations.  When this happens the response
+    typically ends in the middle of a string value or array.  We close the
+    last open string, trim trailing commas, and balance brackets/braces so
+    that ``json.loads`` can parse at least a partial result.
+    """
+    repaired = raw
+
+    # If the last character is an open string (odd number of unescaped quotes),
+    # add a closing quote.
+    quote_count = repaired.count('"') - repaired.count('\\"')
+    if quote_count % 2 == 1:
+        repaired += '"'
+
+    # Remove a trailing comma that would break JSON parsing.
+    repaired = re.sub(r',\s*$', '', repaired.strip())
+
+    # Count open/close brackets and braces to close any that are still open.
+    open_braces = repaired.count('{') - repaired.count('}')
+    open_brackets = repaired.count('[') - repaired.count(']')
+
+    suffix = ']' * max(0, open_brackets) + '}' * max(0, open_braces)
+    repaired = re.sub(r',(\s*[}\]])', r'\1', repaired)
+    repaired += suffix
+
+    return repaired
+
+
 def parse_ai_json_response(raw_response: str) -> dict[str, Any]:
     raw = (raw_response or '').strip()
     if raw.startswith('```'):
@@ -148,30 +179,175 @@ def parse_ai_json_response(raw_response: str) -> dict[str, Any]:
     match = re.search(r'\{.*\}', raw, flags=re.S)
     if match:
         raw = match.group(0)
-    parsed = json.loads(raw)
+    try:
+        parsed = json.loads(raw)
+    except json.JSONDecodeError:
+        # Tolerate trailing commas, a common model slip.
+        repaired = re.sub(r',(\s*[}\]])', r'\1', raw)
+        try:
+            parsed = json.loads(repaired)
+        except json.JSONDecodeError:
+            # Last resort: try to salvage a truncated response.
+            salvaged = _repair_truncated_json(raw)
+            parsed = json.loads(salvaged)
     if not isinstance(parsed, dict):
-        raise ValueError("EjoChat returned a non-object JSON response.")
+        raise ValueError("Avis returned a non-object JSON response.")
     return parsed
+
+
+# Avis truncates long generations mid-JSON (its proxy injects a
+# "be concise" system prompt we cannot change). Short, focused requests
+# complete reliably, so the structured analysis is split into small
+# segments that are merged back into the full schema afterwards.
+CV_ANALYSIS_SYSTEM_PROMPT = (
+    "You are the AVIS CV analysis engine. Convert CV text into strict JSON. "
+    "Output ONLY one raw JSON object: no markdown, no code fences, no commentary. "
+    "Never stop before the closing brace. Completeness beats brevity here. "
+    "Double quotes only, no trailing commas. Write every value in English."
+)
+
+_CV_SEGMENT_RULES = (
+    "Rules: use double quotes; no trailing commas; every value in English; "
+    "each array item is a short phrase (max 12 words) supported by the CV; "
+    "never invent credentials or employers."
+)
+
+
+def _call_cv_segment(prompt: str, retries: int = 3) -> dict[str, Any]:
+    """Send a focused prompt to EjoChat and parse the JSON response.
+
+    Retries with exponential backoff handle transient failures (network,
+    HTTP 429 rate-limit, or truncated output).  Each retry uses the same
+    prompt; the truncation repair in ``parse_ai_json_response`` is what
+    salvages responses that EjoChat cuts short.
+    """
+    import time
+    from app.services.ai_service import chat_with_ai
+
+    last_error: Exception | None = None
+    for attempt in range(max(1, retries + 1)):
+        try:
+            raw = chat_with_ai(prompt, system=CV_ANALYSIS_SYSTEM_PROMPT)
+            return parse_ai_json_response(raw)
+        except (json.JSONDecodeError, ValueError) as exc:
+            last_error = exc
+        except requests.HTTPError as exc:
+            status = getattr(exc.response, "status_code", None)
+            last_error = RuntimeError(f"EjoChat HTTP {status}: {exc}") if status else exc
+        except requests.RequestException as exc:
+            last_error = exc
+        except Exception as exc:  # pragma: no cover - catch-all safety net
+            last_error = exc
+
+        if attempt < retries:
+            time.sleep(min(2 ** attempt, 5))
+
+    if isinstance(last_error, (json.JSONDecodeError, ValueError)):
+        raise ValueError(f"Avis returned unusable JSON after retries: {last_error}")
+    raise RuntimeError(f"Avis request failed after retries: {last_error}")
+
+
+_MAX_ITEMS_RULE = "Limit: return at most 3 items per array to avoid truncation."
+
+
+def analyze_cv_with_ejochat(extracted_text: str) -> dict[str, Any]:
+    """Run the structured CV analysis through EjoChat in small segments.
+
+    EjoChat truncates long generations, so the analysis is split into
+    focused sub-requests (one or two fields each), each with a small
+    output cap.  Results are merged back into the full schema afterwards.
+    """
+    text_slice = extracted_text[:20000]
+
+    core = _call_cv_segment(
+        "Extract ONLY these fields from the CV as JSON:\n"
+        '{"professional_profile": "<one string, max 4 sentences>", '
+        '"skills": ["..."], "experience": ["..."]}\n'
+        f"{_CV_SEGMENT_RULES} {_MAX_ITEMS_RULE}\n\nCV text:\n{text_slice}"
+    )
+    extra = _call_cv_segment(
+        "Extract ONLY these fields from the CV as JSON:\n"
+        '{"education": ["..."], "projects": ["..."], "certifications": ["..."]}\n'
+        f"{_CV_SEGMENT_RULES} {_MAX_ITEMS_RULE}\n\nCV text:\n{text_slice}"
+    )
+    signals_1 = _call_cv_segment(
+        "Extract ONLY these fields from the CV as JSON:\n"
+        '{"achievements": ["..."], "career_signals": ["..."]}\n'
+        f"{_CV_SEGMENT_RULES} {_MAX_ITEMS_RULE}\n\nCV text:\n{text_slice}"
+    )
+    signals_2 = _call_cv_segment(
+        "Extract ONLY these fields from the CV as JSON:\n"
+        '{"target_roles": ["..."], "insights": ["..."]}\n'
+        f"{_CV_SEGMENT_RULES} {_MAX_ITEMS_RULE}\n\nCV text:\n{text_slice}"
+    )
+    interpretation_raw = _call_cv_segment(
+        "Based on the CV, return ONLY a JSON object with key 'ai_interpretation' "
+        "holding these arrays of short strings: strengths, gaps, "
+        "career_signals, career_directions, insights. Return at most 2 items "
+        "in each array. These are inferences, not confirmed user choices.\n"
+        f"{_CV_SEGMENT_RULES}\n\nCV text:\n{text_slice}"
+    )
+
+    interpretation = interpretation_raw.get('ai_interpretation')
+    if not isinstance(interpretation, dict):
+        interpretation = interpretation_raw
+
+    return {
+        'cv_evidence': {
+            'professional_profile': core.get('professional_profile') or '',
+            'skills': core.get('skills') or [],
+            'experience': core.get('experience') or [],
+            'education': extra.get('education') or [],
+            'projects': extra.get('projects') or [],
+            'certifications': extra.get('certifications') or [],
+            'achievements': signals_1.get('achievements') or [],
+            'career_signals': signals_1.get('career_signals') or [],
+            'target_roles': signals_2.get('target_roles') or [],
+            'insights': signals_2.get('insights') or [],
+        },
+        'ai_interpretation': {
+            'strengths': interpretation.get('strengths') or [],
+            'gaps': interpretation.get('gaps') or [],
+            'career_signals': interpretation.get('career_signals') or [],
+            'career_directions': interpretation.get('career_directions') or [],
+            'insights': interpretation.get('insights') or [],
+        },
+    }
 
 
 def validate_cv_analysis(payload: dict[str, Any], profile: dict[str, Any]) -> dict[str, Any]:
     evidence_input = payload.get('cv_evidence') if isinstance(payload.get('cv_evidence'), dict) else payload
     interpretation_input = payload.get('ai_interpretation') if isinstance(payload.get('ai_interpretation'), dict) else payload
 
+    raw_profile = evidence_input.get('professional_profile') or ''
+    if isinstance(raw_profile, list):
+        # Some model runs return the profile as bullet strings; join them
+        # instead of stringifying the whole list with brackets.
+        raw_profile = ' '.join(str(part).strip() for part in raw_profile if str(part).strip())
     evidence = {
-        'professional_profile': str(
-            evidence_input.get('professional_profile')
-            or profile.get('summary')
-            or profile.get('headline')
-            or ''
-        ).strip(),
-        'skills': _unique_strings(evidence_input.get('skills') or profile.get('skills', []), 30),
-        'experience': _unique_strings(evidence_input.get('experience') or profile.get('work_experience', []), 20),
-        'education': _unique_strings(evidence_input.get('education') or profile.get('education', []), 20),
-        'projects': _unique_strings(evidence_input.get('projects') or profile.get('projects', []), 20),
-        'certifications': _unique_strings(evidence_input.get('certifications') or profile.get('certifications', []), 20),
+        'professional_profile': str(raw_profile).strip(),
+        'skills': _unique_strings(evidence_input.get('skills'), 30),
+        'experience': _unique_strings(evidence_input.get('experience'), 20),
+        'education': _unique_strings(evidence_input.get('education'), 20),
+        'projects': _unique_strings(evidence_input.get('projects'), 20),
+        'certifications': _unique_strings(evidence_input.get('certifications'), 20),
+        'achievements': _unique_strings(evidence_input.get('achievements'), 20),
         'career_signals': _unique_strings(evidence_input.get('career_signals'), 20),
+        'target_roles': _unique_strings(evidence_input.get('target_roles'), 10),
+        'insights': _unique_strings(evidence_input.get('insights'), 20),
     }
+    if not evidence['professional_profile']:
+        evidence['professional_profile'] = str(profile.get('summary') or profile.get('headline') or '').strip()
+    if not evidence['skills']:
+        evidence['skills'] = _unique_strings(profile.get('skills', []), 30)
+    if not evidence['experience']:
+        evidence['experience'] = _unique_strings(profile.get('work_experience', []), 20)
+    if not evidence['education']:
+        evidence['education'] = _unique_strings(profile.get('education', []), 20)
+    if not evidence['projects']:
+        evidence['projects'] = _unique_strings(profile.get('projects', []), 20)
+    if not evidence['certifications']:
+        evidence['certifications'] = _unique_strings(profile.get('certifications', []), 20)
 
     interpretation = {
         'strengths': _unique_strings(interpretation_input.get('strengths'), 20),
@@ -181,6 +357,7 @@ def validate_cv_analysis(payload: dict[str, Any], profile: dict[str, Any]) -> di
             interpretation_input.get('career_directions') or interpretation_input.get('target_roles'),
             10,
         ),
+        'insights': _unique_strings(interpretation_input.get('insights'), 20),
     }
 
     if not any(evidence[key] for key in ('professional_profile', 'skills', 'experience', 'education', 'projects', 'certifications')):
@@ -553,6 +730,171 @@ class CVService:
 
     async def get_cv_for_user(self, user_id, cv_id):
         return await self.repo.get_for_user(user_id, cv_id)
+
+    async def get_latest_cv(self, user_id):
+        cvs = await self.repo.list_for_user(user_id)
+        return cvs[0] if cvs else None
+
+    def read_original_file(self, cv) -> bytes:
+        return self.storage.read(cv.path)
+
+    def get_document_page_count(self, filename: str, content: bytes, content_type: str | None = None) -> int | None:
+        lower_name = (filename or '').lower()
+        media_type = (content_type or '').lower()
+        if PdfReader is None:
+            return None
+        if not (lower_name.endswith('.pdf') or media_type == 'application/pdf'):
+            return None
+        try:
+            reader = PdfReader(BytesIO(content))
+            return len(reader.pages)
+        except Exception:
+            return None
+
+    def render_docx_preview(self, content: bytes) -> str:
+        try:
+            import mammoth
+        except Exception as exc:
+            raise ValueError("DOCX preview is unavailable on this server.") from exc
+        try:
+            result = mammoth.convert_to_html(BytesIO(content))
+            html = (result.value or '').strip()
+        except Exception as exc:
+            raise ValueError("AVIS could not render this DOCX file for preview.") from exc
+        if not html:
+            raise ValueError("AVIS could not render this DOCX file for preview.")
+        return html
+
+    async def get_professional_context(self, user_id) -> dict[str, Any]:
+        from app.services.training_service import AITrainingService
+
+        profile = await self.profile_repo.get_by_user_id(user_id)
+        cv = await self.get_latest_cv(user_id)
+        analysis = cv.analysis_json if cv and isinstance(cv.analysis_json, dict) else {}
+        evidence = analysis.get('cv_evidence') if isinstance(analysis.get('cv_evidence'), dict) else {}
+        interpretation = analysis.get('ai_interpretation') if isinstance(analysis.get('ai_interpretation'), dict) else {}
+        career_intent = analysis.get('career_intent') if isinstance(analysis.get('career_intent'), dict) else {}
+        profile_data = analysis.get('profile') if isinstance(analysis.get('profile'), dict) else {}
+
+        # USER-CONFIRMED professional identity (highest priority source).
+        raw_confirmation = getattr(profile, 'professional_context', None) if profile else None
+        user_confirmation = raw_confirmation if isinstance(raw_confirmation, dict) else {}
+
+        trainings = await AITrainingService(self.repo.session).list_trainings(user_id, active_only=True)
+        confirmed_intent = ''
+        training_notes = []
+        for item in trainings:
+            if item.category == 'user_intent' and not confirmed_intent:
+                confirmed_intent = item.content.strip()
+            if item.category != 'cv_analysis':
+                training_notes.append(f"{item.title}: {item.content}")
+
+        # Source priority for intent text:
+        # user confirmation (primary role / target roles) > confirmed training note > CV analysis intent.
+        confirmation_targets = user_confirmation.get('target_roles') or []
+        confirmation_primary = user_confirmation.get('primary_role') or ''
+        if not confirmed_intent:
+            confirmed_intent = (career_intent.get('current_intent') or '').strip()
+
+        evidence_skills = evidence.get('skills') or profile_data.get('skills') or []
+        experience = evidence.get('experience') or profile_data.get('work_experience') or []
+        confirmed_skills = user_confirmation.get('confirmed_skills') or []
+        # Confirmed skills first (they are verified by the user), then remaining evidence.
+        merged_skills = list(confirmed_skills) + [
+            skill for skill in evidence_skills
+            if str(skill).strip().lower() not in {str(s).strip().lower() for s in confirmed_skills}
+        ]
+
+        return {
+            'profile': {
+                'full_name': (profile.full_name if profile else '') or profile_data.get('full_name') or '',
+                'headline': (profile.headline if profile else '') or profile_data.get('headline') or '',
+                'summary': (profile.summary if profile else '') or evidence.get('professional_profile') or '',
+                'location': (profile.location if profile else '') or '',
+            },
+            'cv': {
+                'id': str(cv.id) if cv else None,
+                'filename': cv.filename if cv else None,
+                'analyzed': bool(analysis),
+                'extracted_text_available': bool(cv and (cv.extracted_text or '').strip()),
+            } if cv else None,
+            'user_confirmation': user_confirmation,
+            'cv_evidence': evidence,
+            'ai_interpretation': interpretation,
+            'career_intent': {
+                **career_intent,
+                'current_intent': confirmed_intent,
+                'target_roles': confirmation_targets or career_intent.get('target_roles') or [],
+                'source_of_truth': 'user' if (confirmed_intent or confirmation_targets or confirmation_primary) else career_intent.get('source_of_truth') or 'cv',
+            },
+            'skills': merged_skills,
+            'experience': experience,
+            'training_notes': training_notes[:8],
+            'confirmed_user_intent': confirmed_intent,
+        }
+
+    @staticmethod
+    def format_context_for_ai(context: dict[str, Any]) -> str:
+        evidence = context.get('cv_evidence') or {}
+        interpretation = context.get('ai_interpretation') or {}
+        profile = context.get('profile') or {}
+        intent = context.get('career_intent') or {}
+        confirmed = (context.get('confirmed_user_intent') or '').strip()
+        user_confirmation = context.get('user_confirmation') or {}
+
+        lines = [
+            "USER-CONFIRMED PROFESSIONAL IDENTITY (highest priority; overrides everything below):",
+            f"- Primary role: {user_confirmation.get('primary_role') or 'not confirmed yet'}",
+            f"- Professional level: {user_confirmation.get('professional_level') or 'not confirmed yet'}",
+            f"- Target roles: {', '.join(user_confirmation.get('target_roles') or []) or 'not confirmed yet'}",
+            f"- Confirmed skills: {', '.join(user_confirmation.get('confirmed_skills') or []) or 'not confirmed yet'}",
+            f"- Career interests: {', '.join(user_confirmation.get('career_interests') or []) or 'not confirmed yet'}",
+            f"- Preferred locations: {', '.join(user_confirmation.get('preferred_locations') or []) or 'not confirmed yet'}",
+            f"- Work preference: {user_confirmation.get('work_preference') or 'not confirmed yet'}",
+            "",
+            "CV EVIDENCE (facts found in the document):",
+            f"Profile: {profile.get('full_name') or 'Unknown'} | {profile.get('headline') or 'No headline'} | {profile.get('location') or 'Location unknown'}",
+            f"CV evidence skills: {', '.join(evidence.get('skills') or context.get('skills') or []) or 'none extracted'}",
+            f"CV evidence experience: {'; '.join((evidence.get('experience') or [])[:6]) or 'none extracted'}",
+            f"CV evidence education: {'; '.join(evidence.get('education') or []) or 'none extracted'}",
+            f"CV evidence projects: {'; '.join((evidence.get('projects') or [])[:4]) or 'none extracted'}",
+        ]
+
+        ai_lines = (
+            ', '.join(interpretation.get('career_directions') or interpretation.get('strengths') or []) or 'none'
+        )
+        lines.append(f"AI INFERENCE (possible directions, NOT the user's choice): {ai_lines}")
+        if confirmed:
+            lines.append(f"User-confirmed career intent statement: {confirmed}")
+        lines.append(
+            f"Historical CV role evidence: {intent.get('current_role') or profile.get('headline') or 'unknown'}"
+        )
+
+        notes = context.get('training_notes') or []
+        if notes:
+            lines.append("User-provided training notes:\n- " + "\n- ".join(notes[:6]))
+        return "\n".join(lines)
+
+    async def confirm_career_intent(self, user_id, cv, intent_text: str):
+        from app.schemas.ai_training import AITrainingCreate
+        from app.services.training_service import AITrainingService
+
+        analysis = dict(cv.analysis_json or {})
+        career_intent = dict(analysis.get('career_intent') or {})
+        career_intent['current_intent'] = intent_text
+        career_intent['source_of_truth'] = 'user'
+        analysis['career_intent'] = career_intent
+        await self.save_analysis(user_id, cv, analysis)
+        await AITrainingService(self.repo.session).create_training(
+            user_id,
+            AITrainingCreate(
+                title='Confirmed career intent',
+                content=intent_text,
+                category='user_intent',
+                is_active=True,
+            ),
+        )
+        return await self.get_cv_for_user(user_id, cv.id)
 
     async def save_analysis(self, user_id, cv, analysis: dict[str, Any]):
         memory = AIMemory(

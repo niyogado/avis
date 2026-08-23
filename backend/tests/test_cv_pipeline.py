@@ -1,4 +1,29 @@
-from app.services.cv_service import extract_profile_from_text, match_profile_to_target, build_career_intent
+import asyncio
+import zipfile
+from io import BytesIO
+
+import pytest
+
+from app.services.cv_service import (
+    CVService,
+    build_career_intent,
+    extract_profile_from_text,
+    match_profile_to_target,
+    validate_cv_analysis,
+)
+
+
+def _docx_bytes(text: str) -> bytes:
+    document_xml = (
+        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+        '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">'
+        f'<w:body><w:p><w:r><w:t>{text}</w:t></w:r></w:p></w:body></w:document>'
+    )
+    buffer = BytesIO()
+    with zipfile.ZipFile(buffer, 'w') as archive:
+        archive.writestr('[Content_Types].xml', '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"></Types>')
+        archive.writestr('word/document.xml', document_xml)
+    return buffer.getvalue()
 
 
 SAMPLE_CV = '''
@@ -77,3 +102,126 @@ def test_build_career_intent_distinguishes_evidence_from_current_goal():
     assert 'learning_priorities' in intent
     assert intent['current_intent'] == 'I want to lead data platform engineering at scale.'
     assert 'python' in intent['historical_evidence']['skills']
+
+
+def test_extract_docx_returns_readable_text():
+    text = CVService.extract_text_from_upload(
+        'resume.docx',
+        _docx_bytes('Jane Doe Python FastAPI PostgreSQL'),
+        'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+    )
+    assert 'Jane Doe' in text
+    assert 'FastAPI' in text
+
+
+def test_extract_rejects_empty_and_unsupported_files():
+    with pytest.raises(ValueError):
+        CVService.extract_text_from_upload('resume.pdf', b'', 'application/pdf')
+    with pytest.raises(ValueError):
+        CVService.extract_text_from_upload('resume.png', b'not-a-cv', 'image/png')
+
+
+def test_validate_cv_analysis_rejects_empty_evidence():
+    with pytest.raises(ValueError):
+        validate_cv_analysis({'cv_evidence': {}, 'ai_interpretation': {}}, {})
+
+
+def test_validate_cv_analysis_keeps_evidence_separate_from_inference():
+    parsed = validate_cv_analysis(
+        {
+            'cv_evidence': {
+                'professional_profile': 'Backend engineer',
+                'skills': ['Python', 'FastAPI'],
+                'experience': ['Built APIs'],
+            },
+            'ai_interpretation': {
+                'career_directions': ['AI Engineering'],
+                'strengths': ['Backend delivery'],
+            },
+        },
+        {},
+    )
+    assert parsed['cv_evidence']['skills'] == ['Python', 'FastAPI']
+    assert parsed['ai_interpretation']['career_directions'] == ['AI Engineering']
+
+
+def test_format_context_for_ai_includes_evidence_and_intent():
+    context = CVService.format_context_for_ai({
+        'profile': {'full_name': 'Jane Doe', 'headline': 'Engineer', 'location': 'Kigali'},
+        'cv_evidence': {'skills': ['Python'], 'experience': ['FastAPI work'], 'education': [], 'projects': []},
+        'ai_interpretation': {'career_directions': ['AI Engineering']},
+        'career_intent': {'current_role': 'Engineer'},
+        'confirmed_user_intent': 'AI Engineering',
+        'training_notes': ['Built an internal tool'],
+    })
+    assert 'Python' in context
+    # User confirmations must be presented as the highest-priority source.
+    assert 'USER-CONFIRMED PROFESSIONAL IDENTITY' in context
+    assert 'User-confirmed career intent statement: AI Engineering' in context
+    # AI inference must be explicitly labeled as not chosen by the user.
+    assert 'AI INFERENCE' in context
+
+
+def test_get_professional_context_prioritizes_user_confirmation():
+    async def scenario():
+        from app.database.session import AsyncSessionLocal
+        from app.services.cv_service import CVService
+
+        user_confirmation = {
+            'primary_role': 'Backend Developer',
+            'professional_level': 'junior',
+            'target_roles': ['AI Engineer'],
+            'confirmed_skills': ['Python'],
+            'career_interests': [],
+            'preferred_locations': ['Kigali'],
+            'work_preference': 'remote',
+            'confirmed_at': '2026-08-23T00:00:00+00:00',
+        }
+
+        class FakeProfile:
+            full_name = 'Jane Doe'
+            headline = 'Engineer'
+            summary = ''
+            location = 'Kigali'
+            professional_context = dict(user_confirmation)
+
+        service = CVService.__new__(CVService)
+
+        class FakeProfileRepo:
+            async def get_by_user_id(self, user_id):
+                return FakeProfile()
+
+        service.profile_repo = FakeProfileRepo()
+
+        class FakeRepo:
+            session = None  # AITrainingService is replaced below; session unused
+
+        service.repo = FakeRepo()
+
+        async def fake_get_latest_cv(user_id):
+            return None
+
+        service.get_latest_cv = fake_get_latest_cv
+
+        async def fake_trainings(user_id, active_only=True):
+            return []
+
+        import app.services.training_service as training_module
+
+        original_service = training_module.AITrainingService
+        training_module.AITrainingService = lambda db: type(
+            'FakeTrainingSvc', (), {'list_trainings': staticmethod(fake_trainings)}
+        )()
+        try:
+            context = await service.get_professional_context('user-1')
+        finally:
+            training_module.AITrainingService = original_service
+
+        assert context['user_confirmation']['target_roles'] == ['AI Engineer']
+        assert context['career_intent']['source_of_truth'] == 'user'
+        assert context['career_intent']['target_roles'] == ['AI Engineer']
+        # Confirmed skills lead the merged skill list.
+        assert context['skills'][0] == 'Python'
+
+    asyncio.run(scenario())
+

@@ -1,5 +1,5 @@
 import uuid
-from sqlalchemy import Column, String, ForeignKey, DateTime
+from sqlalchemy import Column, String, ForeignKey, DateTime, JSON
 from sqlalchemy.dialects.postgresql import UUID as PG_UUID
 from sqlalchemy.sql import func
 
@@ -19,5 +19,8 @@ class Profile(Base):
     location = Column(String(255), nullable=True)
     phone = Column(String(30), nullable=True)
     avatar_url = Column(String(2048), nullable=True)
+    # User-confirmed professional identity (CV Editor). Highest-priority
+    # source for AVIS context: overrides CV evidence and AI inference.
+    professional_context = Column(JSON, nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)

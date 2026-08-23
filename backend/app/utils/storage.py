@@ -47,3 +47,11 @@ class Storage:
         self.s3.upload_fileobj(fileobj, self.bucket, dest_name, ExtraArgs=extra_args)
         url = f"https://{self.bucket}.s3.{settings.S3_REGION}.amazonaws.com/{dest_name}"
         return url
+
+    def read(self, stored_path: str) -> bytes:
+        if stored_path.startswith('http://') or stored_path.startswith('https://'):
+            raise StorageError("Remote CV files cannot be read from this storage backend yet.")
+        if not os.path.isfile(stored_path):
+            raise StorageError("The original CV file is no longer available on disk.")
+        with open(stored_path, "rb") as handle:
+            return handle.read()

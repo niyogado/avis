@@ -5,6 +5,7 @@ from app.config.settings import settings
 from app.routes import auth as auth_router
 from app.routes import profile as profile_router
 from app.routes import cv as cv_router
+from app.routes import settings as settings_router
 from app.routes.ai import router as ai_router
 
 app = FastAPI(title=settings.APP_NAME, version="0.1.0")
@@ -32,6 +33,7 @@ app.add_middleware(
 app.include_router(auth_router.router, prefix="/api/auth", tags=["auth"])
 app.include_router(profile_router.router, prefix="/api", tags=["profile"])
 app.include_router(cv_router.router, prefix="/api", tags=["cv"])
+app.include_router(settings_router.router, prefix="/api", tags=["settings"])
 app.include_router(ai_router)
 
 @app.get("/health")

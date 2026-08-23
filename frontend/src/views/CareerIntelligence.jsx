@@ -1,36 +1,25 @@
 import React, { useEffect, useState } from 'react'
 import { ArrowRight, Brain, Compass, TrendingUp } from 'lucide-react'
 import apiClient from '../api/config'
+import Loader from '../components/Loader'
 
 export default function CareerIntelligence() {
-  const [data, setData] = useState({
-    career_signal: 'Professional identity',
-    strong_evidence: [],
-    next_gaps: [],
-    summary: 'AVIS is still learning from your verified profile and training data.',
-    ai_recommendation: null,
-  })
+  const [data, setData] = useState(null)
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState('')
 
-  useEffect(() => {
-    let active = true
+  const load = () => {
+    setLoading(true)
+    setError('')
     apiClient
       .get('/api/ai/career-intelligence')
-      .then((res) => {
-        if (active) setData(res.data)
-      })
-      .catch(() => {
-        if (active) setData({
-          career_signal: 'Profile not yet ready',
-          strong_evidence: [],
-          next_gaps: ['Add verified profile evidence'],
-          summary: 'No live intelligence is available until profile data or a CV is uploaded.',
-          ai_recommendation: null,
-        })
-      })
+      .then((res) => setData(res.data))
+      .catch((err) => setError(err.response?.data?.detail || 'No live intelligence is available until a CV is analyzed.'))
+      .finally(() => setLoading(false))
+  }
 
-    return () => {
-      active = false
-    }
+  useEffect(() => {
+    load()
   }, [])
 
   return (
@@ -42,48 +31,58 @@ export default function CareerIntelligence() {
         </div>
       </div>
 
-      <div className="panel intelligence-hero">
-        <div className="signal-row strong">
-          <Compass size={16} />
-          <span>{data.career_signal}</span>
-        </div>
-        <p>{data.summary}</p>
-      </div>
+      {loading && <Loader variant="ai" title="Comparing your profile..." message="Using CV evidence, training notes, and confirmed intent." />}
+      {error && <Loader variant="error" title="Career Intelligence unavailable" message={error} onRetry={load} />}
 
-      <div className="split-panel">
-        <div className="panel">
-          <div className="mini-label">STRONG EVIDENCE</div>
-          {data.strong_evidence.length === 0 ? (
-            <p>No strong evidence is available yet. Add a CV or training update to improve the signal.</p>
-          ) : (
-            <ul className="check-list">
-              {data.strong_evidence.map((item) => (
-                <li key={item}>{item}</li>
-              ))}
-            </ul>
-          )}
-        </div>
+      {!loading && !error && data && (
+        <>
+          <div className="panel intelligence-hero">
+            <div className="signal-row strong">
+              <Compass size={16} />
+              <span>{data.career_signal}</span>
+            </div>
+            <p>{data.summary}</p>
+            {!data.confirmed_user_intent && (data.ai_interpretation?.career_directions || []).length > 1 && (
+              <p>Your CV suggests {(data.ai_interpretation.career_directions || []).join(' and ')}. Confirm which direction you are targeting on the CV page.</p>
+            )}
+          </div>
 
-        <div className="panel">
-          <div className="mini-label">NEXT GAP</div>
-          <h3>{data.next_gaps[0] || 'Add evidence'}</h3>
-          <p>{data.next_gaps.length ? 'This is the next signal AVIS suggests you strengthen.' : 'No gap is currently identified from your available evidence.'}</p>
-          <button type="button" className="text-button">
-            Explore learning path <ArrowRight size={14} />
-          </button>
-        </div>
-      </div>
+          <div className="split-panel">
+            <div className="panel">
+              <div className="mini-label">STRONG EVIDENCE</div>
+              {(data.strong_evidence || []).length === 0 ? (
+                <p>No strong evidence is available yet. Add a CV or training update to improve the signal.</p>
+              ) : (
+                <ul className="check-list">
+                  {data.strong_evidence.map((item) => (
+                    <li key={item}>{item}</li>
+                  ))}
+                </ul>
+              )}
+            </div>
 
-      <div className="panel insight-panel compact">
-        <div className="signal-row">
-          <TrendingUp size={16} />
-          <span>{data.ai_recommendation?.current_intent || 'Career momentum is based on the latest verified evidence.'}</span>
-        </div>
-        <div className="signal-row muted">
-          <Brain size={16} />
-          <span>{data.ai_recommendation?.target_role || 'AVIS will suggest a more specific plan as more evidence is added.'}</span>
-        </div>
-      </div>
+            <div className="panel">
+              <div className="mini-label">NEXT GAP</div>
+              <h3>{data.next_gaps?.[0] || 'Add evidence'}</h3>
+              <p>{data.next_gaps?.length ? 'This gap is inferred from your CV analysis, not invented.' : 'No gap is currently identified from your available evidence.'}</p>
+              <button type="button" className="text-button">
+                Explore learning path <ArrowRight size={14} />
+              </button>
+            </div>
+          </div>
+
+          <div className="panel insight-panel compact">
+            <div className="signal-row">
+              <TrendingUp size={16} />
+              <span>{data.confirmed_user_intent || data.ai_recommendation?.current_intent || 'Confirm your career intent to separate it from CV history.'}</span>
+            </div>
+            <div className="signal-row muted">
+              <Brain size={16} />
+              <span>{(data.ai_interpretation?.career_directions || []).join(', ') || 'AVIS will suggest a more specific plan as more evidence is added.'}</span>
+            </div>
+          </div>
+        </>
+      )}
     </div>
   )
 }

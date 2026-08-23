@@ -1,6 +1,7 @@
 import React, { useState } from 'react'
 import { ArrowUp, Paperclip, Sparkles } from 'lucide-react'
 import apiClient from '../api/config'
+import Loader from '../components/Loader'
 
 const initialMessages = [
   { role: 'assistant', content: 'Ask about your profile, evidence, strengths, or next career steps.' },
@@ -21,7 +22,7 @@ export default function Chat() {
     setSending(true)
 
     try {
-      const res = await apiClient.post('/api/ai/chat', { message: value })
+      const res = await apiClient.post('/api/ai/chat', { message: value }, { timeout: 90000 })
       const response = res.data?.response || 'I could not generate a response from the current AI configuration.'
       setMessages((current) => [...current, { role: 'assistant', content: response }])
     } catch (error) {
@@ -54,11 +55,12 @@ export default function Chat() {
         <div style={{ padding: '18px 20px', display: 'grid', gap: 12 }}>
           {messages.map((message, index) => (
             <div key={`${message.role}-${index}`} style={{ maxWidth: message.role === 'assistant' ? '78%' : '50%', marginLeft: message.role === 'assistant' ? 0 : 'auto' }} className="panel" aria-label={message.role}>
-              <div style={{ padding: '12px 14px', lineHeight: 1.7, color: 'var(--text)' }}>
+              <div style={{ padding: '12px 14px', lineHeight: 1.7, color: 'var(--text)', }}>
                 {message.content}
               </div>
             </div>
           ))}
+          {sending && <Loader compact variant="ai" title="AVIS is thinking..." message="Using your CV analysis, training notes, and confirmed intent." />}
         </div>
 
         <div style={{ padding: '12px 18px 18px', display: 'flex', gap: 10, borderTop: '1px solid var(--border)' }}>

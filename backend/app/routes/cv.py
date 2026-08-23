@@ -1,15 +1,26 @@
 import json
 
 from fastapi import APIRouter, Depends, UploadFile, File, HTTPException, Form, status
+from fastapi.responses import FileResponse
+from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.dependencies.auth import get_current_user
 from app.database.session import get_db
-from app.services.ai_service import chat_with_ai
-from app.services.cv_service import CVService, build_career_intent, parse_ai_json_response, validate_cv_analysis
+from app.services.cv_service import (
+    CVService,
+    analyze_cv_with_ejochat,
+    build_career_intent,
+    validate_cv_analysis,
+)
 from app.schemas.ai_training import AITrainingCreate
 from app.services.training_service import AITrainingService
 from app.schemas.cv import CVOut
+from app.utils.storage import StorageError
+
+
+class CareerIntentPayload(BaseModel):
+    current_intent: str = Field(..., min_length=2, max_length=255)
 
 router = APIRouter(prefix="/cv")
 
@@ -51,47 +62,33 @@ async def analyze_cv(
     if not extracted_text:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="This CV has no extracted text to analyze.")
 
-    profile = service.extract_profile_from_text(extracted_text)
-
-    ai_prompt = f"""
-You are AVIS, a career intelligence assistant. Analyze the CV below and return only valid JSON.
-
-Rules:
-- Return a JSON object with exactly two top-level keys: cv_evidence and ai_interpretation.
-- cv_evidence must contain: professional_profile, skills, experience, education, projects, certifications, career_signals.
-- ai_interpretation must contain: strengths, gaps, career_signals, career_directions.
-- cv_evidence must include only facts directly supported by the CV text.
-- ai_interpretation may infer possible career directions, but do not present them as confirmed user choices.
-- Keep all list fields as arrays of strings.
-- Do not invent credentials or employers.
-
-CV text:
-{extracted_text[:20000]}
-""".strip()
+        profile = service.extract_profile_from_text(extracted_text)
 
     try:
-        raw_response = chat_with_ai(ai_prompt)
-        parsed = parse_ai_json_response(raw_response)
-        structured = validate_cv_analysis(parsed, profile)
-    except json.JSONDecodeError as exc:
-        await service.mark_analysis_error(cv, "EjoChat returned invalid JSON.")
-        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="EjoChat returned invalid JSON. Please retry.") from exc
-    except ValueError as exc:
+        structured = validate_cv_analysis(analyze_cv_with_ejochat(extracted_text), profile)
+    except (json.JSONDecodeError, ValueError) as exc:
         await service.mark_analysis_error(cv, str(exc))
-        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)) from exc
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="Avis returned unparsable structured analysis. Please retry.") from exc
+    except RuntimeError as exc:
+        await service.mark_analysis_error(cv, str(exc))
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Avis is temporarily unavailable. Please retry in a moment.") from exc
     except Exception as exc:
         await service.mark_analysis_error(cv, "EjoChat analysis failed.")
-        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="EjoChat analysis failed. Please retry.") from exc
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Avis analysis failed. Please retry.") from exc
 
     analysis = service.match_profile_to_target(profile, job_title=job_title, job_description=job_description)
     evidence = structured['cv_evidence']
     interpretation = structured['ai_interpretation']
+    existing_intent = ''
+    if isinstance(cv.analysis_json, dict):
+        existing_intent = str((cv.analysis_json.get('career_intent') or {}).get('current_intent') or '').strip()
+
     intent = build_career_intent(
         profile,
-        current_role=job_title or profile.get('headline') or '',
-        target_roles=[job_title] if job_title else interpretation.get('career_directions', []),
-        learning_priorities=[] if not job_description else [chunk.strip() for chunk in job_description.split(',') if chunk.strip()][:5],
-        current_intent='',
+        current_role=profile.get('headline') or '',
+        target_roles=interpretation.get('career_directions', []),
+        learning_priorities=interpretation.get('gaps') or [],
+        current_intent=existing_intent,
     )
 
     structured_training = {
@@ -100,6 +97,8 @@ CV text:
         'strengths': interpretation.get('strengths') or analysis.get('strong_areas', []),
         'gaps': interpretation.get('gaps') or analysis.get('potential_gaps', []),
         'career_directions': interpretation.get('career_directions') or [],
+        'achievements': evidence.get('achievements') or [],
+        'insights': evidence.get('insights') or interpretation.get('insights') or [],
     }
 
     training_service = AITrainingService(db)
@@ -148,24 +147,22 @@ async def match_cv_against_target(
     db: AsyncSession = Depends(get_db),
 ):
     service = CVService(db)
-    profile_obj = await service.get_master_profile(current_user.id)
-    if not profile_obj:
+    context = await service.get_professional_context(current_user.id)
+    evidence = context.get('cv_evidence') or {}
+    if not evidence and not context.get('profile', {}).get('headline'):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No master profile found. Upload a CV first.")
 
     profile = {
-        'full_name': profile_obj.full_name,
-        'headline': profile_obj.headline,
-        'location': profile_obj.location,
-        'phone': profile_obj.phone,
-        'summary': profile_obj.summary,
-        'skills': [
-            'python', 'sql', 'postgresql', 'aws', 'docker', 'airflow', 'leadership'
-        ],
-        'soft_skills': ['leadership', 'communication'],
-        'work_experience': [],
-        'projects': [],
-        'education': [],
-        'certifications': [],
+        'full_name': context['profile'].get('full_name'),
+        'headline': context['profile'].get('headline'),
+        'location': context['profile'].get('location'),
+        'summary': context['profile'].get('summary'),
+        'skills': evidence.get('skills') or context.get('skills') or [],
+        'soft_skills': [],
+        'work_experience': evidence.get('experience') or context.get('experience') or [],
+        'projects': evidence.get('projects') or [],
+        'education': evidence.get('education') or [],
+        'certifications': evidence.get('certifications') or [],
     }
     analysis = service.match_profile_to_target(
         profile,
@@ -180,6 +177,74 @@ async def list_cvs(current_user=Depends(get_current_user), db: AsyncSession = De
     repo = CVService(db)
     cvs = await repo.repo.list_for_user(current_user.id)
     return cvs
+
+
+@router.get("/{cv_id}/file")
+async def get_cv_file(cv_id: str, current_user=Depends(get_current_user), db: AsyncSession = Depends(get_db)):
+    service = CVService(db)
+    cv = await service.get_cv_for_user(current_user.id, cv_id)
+    if not cv:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="CV not found")
+    try:
+        service.read_original_file(cv)
+    except StorageError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    return FileResponse(
+        cv.path,
+        media_type=cv.content_type or 'application/octet-stream',
+        filename=cv.filename,
+        content_disposition_type='inline',
+    )
+
+
+@router.get("/{cv_id}/preview")
+async def get_cv_preview(cv_id: str, current_user=Depends(get_current_user), db: AsyncSession = Depends(get_db)):
+    service = CVService(db)
+    cv = await service.get_cv_for_user(current_user.id, cv_id)
+    if not cv:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="CV not found")
+
+    filename = (cv.filename or '').lower()
+    media_type = (cv.content_type or '').lower()
+    try:
+        content = service.read_original_file(cv)
+    except StorageError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+
+    if filename.endswith('.pdf') or media_type == 'application/pdf':
+        page_count = service.get_document_page_count(cv.filename, content, cv.content_type)
+        return {
+            'format': 'pdf',
+            'page_count': page_count,
+            'file_url': f'/api/cv/{cv.id}/file',
+        }
+
+    if filename.endswith('.docx') or media_type.endswith('wordprocessingml.document'):
+        try:
+            html = service.render_docx_preview(content)
+        except ValueError as exc:
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
+        return {
+            'format': 'docx',
+            'page_count': 1,
+            'html': html,
+        }
+
+    raise HTTPException(status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE, detail="Preview is only available for PDF and DOCX files.")
+
+
+@router.post("/{cv_id}/intent", response_model=CVOut)
+async def confirm_career_intent(
+    cv_id: str,
+    payload: CareerIntentPayload,
+    current_user=Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    service = CVService(db)
+    cv = await service.get_cv_for_user(current_user.id, cv_id)
+    if not cv:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="CV not found")
+    return await service.confirm_career_intent(current_user.id, cv, payload.current_intent.strip())
 
 
 def build_search_profile(profile: dict, job_title: str | None = None, job_description: str | None = None):

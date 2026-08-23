@@ -1,37 +1,31 @@
 import React, { useEffect, useState } from 'react'
-import { ArrowRight, BookOpen, CheckCircle2, Clock3 } from 'lucide-react'
+import { ArrowRight, BookOpen, CheckCircle2 } from 'lucide-react'
 import apiClient from '../api/config'
+import Loader from '../components/Loader'
 
 export default function Learning() {
   const [lessons, setLessons] = useState([])
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState('')
 
-  useEffect(() => {
-    let active = true
+  const load = () => {
+    setLoading(true)
+    setError('')
     apiClient
       .get('/api/ai/career-intelligence')
       .then((res) => {
         const gaps = res.data?.next_gaps || []
-        const mapped = gaps.length
-          ? gaps.map((gap, index) => ({
-              title: gap,
-              reason: `This gap is currently the clearest improvement for your ${res.data?.career_signal || 'career signal'}.`,
-              status: index === 0 ? 'Recommended' : 'Suggested',
-              duration: index === 0 ? '4 weeks' : '2 weeks',
-            }))
-          : [{
-              title: 'Add more profile evidence',
-              reason: 'AVIS needs a stronger proof base before recommending a learning plan.',
-              status: 'Queued',
-              duration: 'Variable',
-            }]
-
-        if (active) setLessons(mapped)
+        setLessons(gaps.map((gap) => ({
+          title: gap,
+          reason: `Inferred from your ${res.data?.confirmed_user_intent || res.data?.career_signal || 'current career context'}.`,
+        })))
       })
-      .catch(() => {
-        if (active) setLessons([{ title: 'No roadmap available yet', reason: 'Upload a CV or add training notes to unlock personalized learning recommendations.', status: 'Waiting', duration: 'Variable' }])
-      })
+      .catch((err) => setError(err.response?.data?.detail || 'Upload a CV before AVIS can recommend learning from real gaps.'))
+      .finally(() => setLoading(false))
+  }
 
-    return () => { active = false }
+  useEffect(() => {
+    load()
   }, [])
 
   return (
@@ -43,28 +37,32 @@ export default function Learning() {
         </div>
       </div>
 
-      <div className="stack-list">
-        {lessons.map((lesson) => (
-          <div key={lesson.title} className="panel learning-item">
-            <div className="learning-top">
-              <span className="mini-icon"><BookOpen size={16} /></span>
-              <div>
-                <h3>{lesson.title}</h3>
-                <p>{lesson.reason}</p>
+      {loading && <Loader variant="ai" title="Comparing your profile..." message="Reading inferred skill gaps from your CV analysis." />}
+      {error && <Loader variant="error" title="Learning unavailable" message={error} onRetry={load} />}
+
+      {!loading && !error && (
+        <div className="stack-list">
+          {lessons.length === 0 ? (
+            <div className="panel" style={{ padding: '20px' }}>No inferred gaps yet. Analyze a CV to populate this list from real evidence.</div>
+          ) : lessons.map((lesson) => (
+            <div key={lesson.title} className="panel learning-item">
+              <div className="learning-top">
+                <span className="mini-icon"><BookOpen size={16} /></span>
+                <div>
+                  <h3>{lesson.title}</h3>
+                  <p>{lesson.reason}</p>
+                </div>
               </div>
+              <div className="learning-meta">
+                <span className="status-badge soft"><CheckCircle2 size={12} /> From CV analysis</span>
+              </div>
+              <button type="button" className="text-button">
+                Explore <ArrowRight size={14} />
+              </button>
             </div>
-
-            <div className="learning-meta">
-              <span className="status-badge soft"><CheckCircle2 size={12} /> {lesson.status}</span>
-              <span className="meta-chip"><Clock3 size={12} /> {lesson.duration}</span>
-            </div>
-
-            <button type="button" className="text-button">
-              Explore <ArrowRight size={14} />
-            </button>
-          </div>
-        ))}
-      </div>
+          ))}
+        </div>
+      )}
     </div>
   )
 }

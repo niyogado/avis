@@ -12,15 +12,15 @@ import {
 } from 'lucide-react'
 import apiClient from '../api/config'
 import Loader from '../components/Loader'
+import ProfessionalIdentityEditor from '../components/ProfessionalIdentityEditor'
 
 const PAGE_SIZE = 2600
 
 const stageCopy = {
   uploading: ['upload', 'Uploading CV...', 'Sending the original file to AVIS.'],
   extracting: ['extracting', 'Extracting CV text...', 'The backend is reading the PDF or DOCX content.'],
-  analyzing: ['analyzing', 'Analyzing CV...', 'EjoChat is extracting structured career evidence.'],
+  analyzing: ['analyzing', 'Analyzing CV...', 'Avis is extracting structured career evidence.'],
   saving: ['saving', 'Saving analysis...', 'AVIS is storing the validated CV memory.'],
-  success: ['success', 'Analysis saved', 'Your CV analysis is ready and will persist after refresh.'],
   error: ['error', 'CV analysis failed', 'Retry the failed step when you are ready.'],
 }
 
@@ -66,11 +66,16 @@ export default function MyCV() {
   const [activeCv, setActiveCv] = useState(null)
   const [selectedFile, setSelectedFile] = useState(null)
   const [filePreviewUrl, setFilePreviewUrl] = useState('')
-  const [previewMode, setPreviewMode] = useState('text')
+  const [docxHtml, setDocxHtml] = useState('')
+  const [previewKind, setPreviewKind] = useState('')
+  const [pdfPageCount, setPdfPageCount] = useState(0)
+  const [previewMode, setPreviewMode] = useState('file')
   const [pageIndex, setPageIndex] = useState(0)
   const [zoom, setZoom] = useState(100)
   const [stage, setStage] = useState('idle')
   const [error, setError] = useState('')
+  const [intentDraft, setIntentDraft] = useState('')
+  const [savingIntent, setSavingIntent] = useState(false)
   const fileInputRef = useRef(null)
 
   const busy = ['uploading', 'extracting', 'analyzing', 'saving'].includes(stage)
@@ -80,9 +85,53 @@ export default function MyCV() {
   const previewText = activeCv?.extracted_text || ''
   const pages = useMemo(() => chunkText(previewText), [previewText])
   const currentPage = pages[Math.min(pageIndex, Math.max(pages.length - 1, 0))] || ''
-  const canShowFilePreview = Boolean(filePreviewUrl && selectedFile?.type === 'application/pdf')
+  const canShowFilePreview = Boolean(filePreviewUrl || docxHtml)
+  const pdfSrc = filePreviewUrl
+    ? `${filePreviewUrl}#page=${pageIndex + 1}&zoom=${zoom}`
+    : ''
 
   const latestCv = cvs[0] || null
+
+  const revokePreviewUrl = () => {
+    if (filePreviewUrl) URL.revokeObjectURL(filePreviewUrl)
+  }
+
+  const loadSavedPreview = async (cv) => {
+    if (!cv?.id) {
+      setDocxHtml('')
+      setPreviewKind('')
+      setPdfPageCount(0)
+      return
+    }
+    try {
+      const preview = await apiClient.get(`/api/cv/${cv.id}/preview`)
+      if (preview.data?.format === 'pdf') {
+        const file = await apiClient.get(`/api/cv/${cv.id}/file`, { responseType: 'blob' })
+        const url = URL.createObjectURL(file.data)
+        setFilePreviewUrl((current) => {
+          if (current) URL.revokeObjectURL(current)
+          return url
+        })
+        setDocxHtml('')
+        setPreviewKind('pdf')
+        setPdfPageCount(preview.data.page_count || 0)
+        setPreviewMode('file')
+        return
+      }
+      if (preview.data?.format === 'docx') {
+        setFilePreviewUrl((current) => {
+          if (current) URL.revokeObjectURL(current)
+          return ''
+        })
+        setDocxHtml(preview.data.html || '')
+        setPreviewKind('docx')
+        setPdfPageCount(1)
+        setPreviewMode('file')
+      }
+    } catch (_) {
+      setPreviewKind('')
+    }
+  }
 
   const loadCvs = async () => {
     try {
@@ -90,7 +139,9 @@ export default function MyCV() {
       const next = response.data || []
       setCvs(next)
       setActiveCv(next[0] || null)
+      setIntentDraft(next[0]?.analysis_json?.career_intent?.current_intent || '')
       setError(next[0]?.analysis_status === 'error' ? next[0]?.analysis_error || 'The last analysis failed.' : '')
+      await loadSavedPreview(next[0])
     } catch (err) {
       setError(err.response?.data?.detail || 'Unable to load your saved CV.')
       setStage('error')
@@ -99,20 +150,28 @@ export default function MyCV() {
 
   useEffect(() => {
     loadCvs()
+    return revokePreviewUrl
   }, [])
 
   useEffect(() => {
     setPageIndex(0)
+    setIntentDraft(activeCv?.analysis_json?.career_intent?.current_intent || '')
   }, [activeCv?.id])
 
   useEffect(() => {
-    if (!selectedFile) {
-      setFilePreviewUrl('')
-      return undefined
+    if (!selectedFile) return undefined
+    if (selectedFile.type === 'application/pdf' || selectedFile.name.toLowerCase().endsWith('.pdf')) {
+      const url = URL.createObjectURL(selectedFile)
+      setFilePreviewUrl((current) => {
+        if (current) URL.revokeObjectURL(current)
+        return url
+      })
+      setDocxHtml('')
+      setPreviewKind('pdf')
+      setPreviewMode('file')
+      return () => URL.revokeObjectURL(url)
     }
-    const url = URL.createObjectURL(selectedFile)
-    setFilePreviewUrl(url)
-    return () => URL.revokeObjectURL(url)
+    return undefined
   }, [selectedFile])
 
   const analyzeCv = async (cvId) => {
@@ -125,7 +184,7 @@ export default function MyCV() {
       setStage('saving')
       setActiveCv(response.data)
       setCvs((current) => [response.data, ...current.filter((cv) => cv.id !== response.data.id)])
-      setStage('success')
+      setStage('idle')
     } catch (err) {
       setError(err.response?.data?.detail || 'CV analysis could not be completed.')
       setStage('error')
@@ -151,6 +210,7 @@ export default function MyCV() {
       })
       setActiveCv(uploadResponse.data)
       setCvs((current) => [uploadResponse.data, ...current.filter((cv) => cv.id !== uploadResponse.data.id)])
+      await loadSavedPreview(uploadResponse.data)
       await analyzeCv(uploadResponse.data.id)
     } catch (err) {
       setError(err.response?.data?.detail || 'Unable to upload or extract this CV.')
@@ -175,6 +235,23 @@ export default function MyCV() {
     }
   }
 
+  const saveIntent = async (value) => {
+    if (!activeCv?.id || !value.trim() || savingIntent) return
+    setSavingIntent(true)
+    setError('')
+    try {
+      const response = await apiClient.post(`/api/cv/${activeCv.id}/intent`, {
+        current_intent: value.trim(),
+      })
+      setActiveCv(response.data)
+      setIntentDraft(value.trim())
+    } catch (err) {
+      setError(err.response?.data?.detail || 'Unable to save your career intent.')
+    } finally {
+      setSavingIntent(false)
+    }
+  }
+
   const [loaderVariant, loaderTitle, loaderMessage] = stageCopy[stage] || []
 
   const skills = toList(evidence.skills)
@@ -182,18 +259,24 @@ export default function MyCV() {
   const education = toList(evidence.education)
   const projects = toList(evidence.projects)
   const certifications = toList(evidence.certifications)
+  const achievements = toList(evidence.achievements)
   const evidenceSignals = toList(evidence.career_signals)
   const strengths = toList(interpretation.strengths)
   const gaps = toList(interpretation.gaps)
   const interpretedSignals = toList(interpretation.career_signals)
   const directions = toList(interpretation.career_directions)
+  const insights = toList(interpretation.insights || evidence.insights)
+  const confirmedIntent = analysis?.career_intent?.current_intent || ''
+  const textPageCount = pages.length
+  const filePageCount = previewKind === 'pdf' ? pdfPageCount : 1
+  const controlCount = previewMode === 'file' ? filePageCount : textPageCount
 
   return (
     <div className="page-shell cv-page">
       <div className="section-head narrow">
         <div>
           <div className="eyebrow">CV</div>
-          <h1>AI CV Analyzer</h1>
+          <h1>CV Analyzer</h1>
         </div>
 
         <button type="button" className="primary-button" onClick={() => fileInputRef.current?.click()} disabled={busy}>
@@ -236,40 +319,42 @@ export default function MyCV() {
           </div>
 
           <div className="cv-preview-toolbar">
-            <button type="button" className={previewMode === 'text' ? 'inline-button active' : 'inline-button'} onClick={() => setPreviewMode('text')} disabled={!previewText}>
-              Text
-            </button>
             <button type="button" className={previewMode === 'file' ? 'inline-button active' : 'inline-button'} onClick={() => setPreviewMode('file')} disabled={!canShowFilePreview}>
               File
             </button>
-            <button type="button" className="inline-button" onClick={() => setZoom((value) => Math.max(80, value - 10))} disabled={!previewText || zoom <= 80}>
+            <button type="button" className={previewMode === 'text' ? 'inline-button active' : 'inline-button'} onClick={() => setPreviewMode('text')} disabled={!previewText}>
+              Extracted text
+            </button>
+            <button type="button" className="inline-button" onClick={() => setZoom((value) => Math.max(80, value - 10))} disabled={zoom <= 80}>
               -
             </button>
             <span className="cv-toolbar-value">{zoom}%</span>
-            <button type="button" className="inline-button" onClick={() => setZoom((value) => Math.min(140, value + 10))} disabled={!previewText || zoom >= 140}>
+            <button type="button" className="inline-button" onClick={() => setZoom((value) => Math.min(160, value + 10))} disabled={zoom >= 160}>
               +
             </button>
           </div>
 
           <div className="cv-preview-body">
-            {previewMode === 'file' && canShowFilePreview ? (
-              <iframe title="Uploaded CV preview" src={filePreviewUrl} className="cv-file-frame" />
+            {previewMode === 'file' && previewKind === 'pdf' && pdfSrc ? (
+              <iframe title="Uploaded CV preview" src={pdfSrc} className="cv-file-frame" />
+            ) : previewMode === 'file' && previewKind === 'docx' && docxHtml ? (
+              <iframe title="Uploaded DOCX preview" srcDoc={docxHtml} className="cv-file-frame" style={{ zoom: `${zoom}%` }} />
             ) : currentPage ? (
               <pre className="cv-text-preview" style={{ fontSize: `${zoom}%` }}>{currentPage}</pre>
             ) : (
               <div className="cv-empty-state">
                 <FileText size={24} />
-                <p>Upload a text-based PDF or DOCX to preview the extracted CV text.</p>
+                <p>Upload a PDF or DOCX to preview the original document and extract its text.</p>
               </div>
             )}
           </div>
 
           <div className="cv-page-controls">
-            <button type="button" className="secondary-button" onClick={() => setPageIndex((value) => Math.max(0, value - 1))} disabled={pageIndex === 0 || pages.length === 0}>
+            <button type="button" className="secondary-button" onClick={() => setPageIndex((value) => Math.max(0, value - 1))} disabled={pageIndex === 0 || controlCount <= 1}>
               Previous
             </button>
-            <span>Page {pages.length ? pageIndex + 1 : 0} of {pages.length}</span>
-            <button type="button" className="secondary-button" onClick={() => setPageIndex((value) => Math.min(pages.length - 1, value + 1))} disabled={pageIndex >= pages.length - 1 || pages.length === 0}>
+            <span>Page {controlCount ? pageIndex + 1 : 0} of {controlCount || 0}</span>
+            <button type="button" className="secondary-button" onClick={() => setPageIndex((value) => Math.min(controlCount - 1, value + 1))} disabled={pageIndex >= controlCount - 1 || controlCount <= 1}>
               Next
             </button>
           </div>
@@ -281,7 +366,7 @@ export default function MyCV() {
               <span className="mini-icon"><Brain size={16} /></span>
               <div>
                 <strong>AI Analysis</strong>
-                <small>{activeCv?.analyzed_at ? `Saved ${formatDate(activeCv.analyzed_at)}` : 'Awaiting EjoChat analysis'}</small>
+                <small>{activeCv?.analyzed_at ? `Saved ${formatDate(activeCv.analyzed_at)}` : 'Awaiting Avis analysis'}</small>
               </div>
             </div>
             {activeCv?.id && (
@@ -308,6 +393,7 @@ export default function MyCV() {
               <Section icon={GraduationCap} title="Education" items={education} empty="No education section was extracted." />
               <Section icon={Target} title="Projects" items={projects} empty="No project evidence was extracted." />
               <Section icon={CheckCircle} title="Certifications" items={certifications} empty="No certifications were extracted." />
+              <Section icon={CheckCircle} title="Achievements" items={achievements} empty="No achievements were extracted." />
               <Section icon={Briefcase} title="Career Signals" items={evidenceSignals} empty="No explicit career signals were present in the CV." />
 
               <div className="cv-interpretation-band">
@@ -318,7 +404,34 @@ export default function MyCV() {
               <Section icon={CheckCircle} title="Strengths" items={strengths} empty="No strengths were inferred." />
               <Section icon={AlertCircle} title="Gaps" items={gaps} empty="No gaps were inferred." />
               <Section icon={Target} title="Career Direction" items={directions} empty="No career directions were inferred." />
-              <Section icon={Brain} title="AI Insights" items={interpretedSignals} empty="No additional AI signals were inferred." />
+              <Section icon={Brain} title="AI Insights" items={insights.length ? insights : interpretedSignals} empty="No additional AI signals were inferred." />
+
+              <section className="cv-profile-block">
+                <div className="cv-section-title"><Target size={16} /><strong>Your career intent</strong></div>
+                <p>{confirmedIntent || 'Not confirmed yet. AVIS will not treat inferred directions as your choice until you confirm.'}</p>
+                {directions.length > 0 && !confirmedIntent && (
+                  <div className="quick-actions" style={{ marginTop: 12 }}>
+                    {directions.slice(0, 3).map((direction) => (
+                      <button key={direction} type="button" className="secondary-button" onClick={() => saveIntent(direction)} disabled={savingIntent}>
+                        {direction}
+                      </button>
+                    ))}
+                  </div>
+                )}
+                <div className="quick-actions" style={{ marginTop: 12 }}>
+                  <input
+                    value={intentDraft}
+                    onChange={(event) => setIntentDraft(event.target.value)}
+                    placeholder="Confirm the direction you want now"
+                    style={{ flex: 1, minWidth: 180, borderRadius: 12, border: '1px solid var(--border)', padding: '10px 12px', background: 'rgba(255,255,255,0.4)', color: 'var(--text)' }}
+                  />
+                  <button type="button" className="primary-button" onClick={() => saveIntent(intentDraft)} disabled={savingIntent || !intentDraft.trim()}>
+                    {savingIntent ? 'Saving…' : 'Confirm intent'}
+                  </button>
+                </div>
+              </section>
+
+              <ProfessionalIdentityEditor analysis={analysis} />
             </div>
           ) : (
             <div className="cv-empty-state">

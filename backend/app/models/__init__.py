@@ -10,3 +10,6 @@ from app.models.ai_chat_session import AIChatSession  # noqa: F401
 from app.models.ai_chat_message import AIChatMessage  # noqa: F401
 from app.models.ai_profile_update import AIProfileUpdate  # noqa: F401
 from app.models.ai_memory import AIMemory  # noqa: F401
+from app.models.application import Application  # noqa: F401
+from app.models.job_alert import JobAlert  # noqa: F401
+from app.models.user_settings import UserSettings  # noqa: F401
