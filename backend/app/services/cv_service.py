@@ -1,4 +1,5 @@
 import json
+import logging
 import re
 import zipfile
 from datetime import datetime, timezone
@@ -217,23 +218,40 @@ def _call_cv_segment(prompt: str, retries: int = 3) -> dict[str, Any]:
     """Send a focused prompt to EjoChat and parse the JSON response.
 
     Retries with exponential backoff handle transient failures (network,
-    HTTP 429 rate-limit, or truncated output).  Each retry uses the same
-    prompt; the truncation repair in ``parse_ai_json_response`` is what
-    salvages responses that EjoChat cuts short.
+    HTTP 429 rate-limit, or truncated output).  The FINAL attempt is a
+    controlled repair: the model is shown its own broken output and asked to
+    return ONLY valid JSON.
     """
     import time
+
     from app.services.ai_service import chat_with_ai
 
+    logger = logging.getLogger("avis.cv_analysis")
+
+    def _attempt(call_prompt: str) -> dict[str, Any]:
+        nonlocal last_raw
+        raw = chat_with_ai(call_prompt, system=CV_ANALYSIS_SYSTEM_PROMPT)
+        # Provider normalization safety net: every provider must yield text.
+        if not isinstance(raw, str):
+            raw = json.dumps(raw, ensure_ascii=False) if isinstance(raw, (dict, list)) else str(raw)
+        last_raw = raw
+        logger.info(
+            "cv_segment response: chars=%d fenced=%s head=%.100r",
+            len(raw), raw.lstrip().startswith("```"), raw[:100],
+        )
+        return parse_ai_json_response(raw)
+
     last_error: Exception | None = None
+    last_raw = ""
     for attempt in range(max(1, retries + 1)):
         try:
-            raw = chat_with_ai(prompt, system=CV_ANALYSIS_SYSTEM_PROMPT)
-            return parse_ai_json_response(raw)
+            return _attempt(prompt)
         except (json.JSONDecodeError, ValueError) as exc:
             last_error = exc
         except requests.HTTPError as exc:
             status = getattr(exc.response, "status_code", None)
-            last_error = RuntimeError(f"EjoChat HTTP {status}: {exc}") if status else exc
+            last_error = RuntimeError(f"AI provider HTTP {status}: {exc}") if status else exc
+            break  # provider-level failures rarely fix themselves quickly
         except requests.RequestException as exc:
             last_error = exc
         except Exception as exc:  # pragma: no cover - catch-all safety net
@@ -242,9 +260,26 @@ def _call_cv_segment(prompt: str, retries: int = 3) -> dict[str, Any]:
         if attempt < retries:
             time.sleep(min(2 ** attempt, 5))
 
+    # CONTROLLED REPAIR: one shot showing the model its own broken answer.
+    try:
+        logger.warning(
+            "cv_segment parse failed after %d attempt(s) (%s); requesting strict-JSON repair",
+            retries + 1, last_error,
+        )
+        repaired_prompt = (
+            "Your previous answer was not valid JSON and could not be parsed.\n"
+            "Return ONLY one valid JSON object with exactly the requested fields.\n"
+            "No markdown, no code fences, no commentary. Complete every field.\n\n"
+            f"PREVIOUS ANSWER:\n{last_raw[:6000]}"
+        )
+        return _attempt(repaired_prompt)
+    except Exception as exc:  # noqa: BLE001 - final failure surfaces below
+        last_error = exc
+
+    logger.error("cv_segment failed after all attempts incl. repair: %s", last_error)
     if isinstance(last_error, (json.JSONDecodeError, ValueError)):
-        raise ValueError(f"Avis returned unusable JSON after retries: {last_error}")
-    raise RuntimeError(f"Avis request failed after retries: {last_error}")
+        raise ValueError(f"The AI returned unusable structured analysis after retries: {last_error}")
+    raise RuntimeError(f"The AI request failed after retries: {last_error}")
 
 
 _MAX_ITEMS_RULE = "Limit: return at most 3 items per array to avoid truncation."
@@ -258,6 +293,14 @@ def analyze_cv_with_ejochat(extracted_text: str) -> dict[str, Any]:
     output cap.  Results are merged back into the full schema afterwards.
     """
     text_slice = extracted_text[:20000]
+
+    logger = logging.getLogger("avis.cv_analysis")
+    logger.info(
+        "cv_analysis start: extracted_chars=%d prompt_slice=%d empty=%s",
+        len(extracted_text), len(text_slice), not extracted_text,
+    )
+    if not extracted_text:
+        raise ValueError("No extracted CV text was provided to analyze.")
 
     core = _call_cv_segment(
         "Extract ONLY these fields from the CV as JSON:\n"

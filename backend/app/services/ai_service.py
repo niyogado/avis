@@ -1,3 +1,4 @@
+import logging
 import os
 
 import requests
@@ -7,6 +8,7 @@ load_dotenv()
 
 EJOCHAT_API_URL = os.getenv("EJOCHAT_API_URL")
 EJOCHAT_API_KEY = os.getenv("EJOCHAT_API_KEY")
+HUGGINGFACE_API_KEY = os.getenv("HUGGINGFACE_API_KEY", "").strip()
 
 # The EjoChat proxy injects its own system prompt (a Kinyarwanda "Subiza"
 # assistant instructed to answer concisely). Without an explicit system
@@ -42,6 +44,8 @@ _STYLE_INSTRUCTIONS = {
 }
 
 HF_INFERENCE_URL_TEMPLATE = "https://api-inference.huggingface.co/models/{model}"
+
+logger = logging.getLogger("avis.ai")
 
 
 def provider_available(name: str) -> bool:
@@ -147,9 +151,21 @@ def chat_with_ai(
             continue
         try:
             if name == "ejochat":
-                return _call_ejochat(message, resolved_system)
-            return _call_huggingface(message, resolved_system, model)
+                result = _call_ejochat(message, resolved_system)
+            else:
+                result = _call_huggingface(message, resolved_system, model)
+            # Provider normalization: guarantee plain-text output regardless
+            # of provider response shape.
+            if not isinstance(result, str):
+                result = (
+                    json.dumps(result, ensure_ascii=False)
+                    if isinstance(result, (dict, list))
+                    else str(result)
+                )
+            logger.info("AI call OK provider=%s chars=%d", name, len(result))
+            return result
         except Exception as exc:  # noqa: BLE001 - try the next provider
+            logger.warning("AI call failed provider=%s error=%s: %s", name, type(exc).__name__, exc)
             last_error = exc
             continue
 

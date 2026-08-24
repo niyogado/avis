@@ -507,6 +507,98 @@ button, input, textarea, select {
   padding: 22px 20px;
 }
 
+/* ------------------------------------------------------------------ */
+/* Career Intelligence: multi-direction browsing                        */
+/* ------------------------------------------------------------------ */
+.path-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 8px;
+}
+
+.path-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 14px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.45);
+  color: var(--text);
+  font-size: 0.88rem;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.path-tab:hover {
+  background: rgba(255, 255, 255, 0.7);
+}
+
+.path-tab.selected {
+  border-color: var(--accent);
+  background: rgba(216, 105, 26, 0.08);
+  color: var(--accent);
+}
+
+.path-badge {
+  font-size: 0.6rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  padding: 2px 6px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: rgba(22, 21, 19, 0.04);
+}
+
+.path-tab.amber .path-badge {
+  border-color: rgba(216, 105, 26, 0.25);
+  color: #9a4c10;
+  background: rgba(216, 105, 26, 0.08);
+}
+
+.path-tab.blue .path-badge {
+  border-color: rgba(37, 99, 235, 0.25);
+  color: #1d4ed8;
+  background: rgba(37, 99, 235, 0.08);
+}
+
+.tag-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.skill-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 5px 10px;
+  border-radius: 999px;
+  font-size: 0.78rem;
+  border: 1px solid var(--border);
+  background: rgba(255, 255, 255, 0.55);
+  color: var(--text-soft);
+}
+
+.action-links {
+  display: flex;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+
+.intelligence-hero {
+  padding: 22px 20px;
+}
+
+.hint {
+  font-size: 0.85rem;
+  color: var(--text-soft);
+  margin: 8px 0 4px;
+}
+
 .list-row {
   display: flex;
   align-items: center;

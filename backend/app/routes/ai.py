@@ -1,3 +1,5 @@
+import re
+
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -6,7 +8,7 @@ from app.database.session import get_db
 from app.dependencies.auth import get_current_user
 from app.schemas.ai_training import AITrainingCreate, AITrainingOut
 from app.services.chat_service import chat
-from app.services.cv_service import CVService
+from app.services.cv_service import CVService, _tokenize
 from app.services.profile_service import ProfileService
 from app.services.training_service import AITrainingService
 from app.services.career_hub_service import CareerHubService
@@ -50,6 +52,113 @@ async def ai_chat(request: ChatRequest, current_user=Depends(get_current_user), 
         return {"response": response}
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc)) from exc
+
+
+def _split_label_tokens(label: str) -> set[str]:
+    return _tokenize(label)
+
+
+def build_career_paths(
+    confirmation: dict | None,
+    confirmed_intent: str,
+    directions: list[str],
+    evidence: dict,
+    interpretation: dict,
+    skills: list[str],
+    professional_level: str = '',
+) -> list[dict]:
+    """Build ranked career paths strictly from real user data.
+
+    Priority: USER CONFIRMATION > explicit CV target roles > AI inference.
+    Every strength/gap item is derived from stored evidence or the stored AI
+    interpretation — never invented.
+    """
+    skill_tokens_by_item: list[tuple[str, set]] = []
+    for skill in skills or []:
+        norm = (skill or '').strip()
+        if norm:
+            skill_tokens_by_item.append((norm, _tokenize(norm)))
+
+    evidence_text_tokens: set = set()
+    for group_key in ('skills', 'experience', 'projects', 'education', 'certifications', 'achievements'):
+        for item in evidence.get(group_key) or []:
+            evidence_text_tokens |= _tokenize(str(item))
+    for skill in skills or []:
+        evidence_text_tokens |= _tokenize(str(skill))
+
+    paths: list[dict] = []
+    seen: set[str] = set()
+
+    def add_path(label: str, source: str) -> None:
+        clean = re.sub(r'\s+', ' ', (label or '')).strip()
+        if not clean or len(clean) > 80:
+            return
+        key = clean.lower()
+        if key in seen:
+            return
+        seen.add(key)
+
+        dir_tokens = _tokenize(clean)
+        matched = [
+            original for original, toks in skill_tokens_by_item
+        if toks & dir_tokens
+        ][:6]
+        # A user-confirmed direction owns the candidate's confirmed skills
+        # outright; otherwise only token-overlap skills count as evidence.
+        if source == 'user_confirmed':
+            matched = list(skill_tokens_by_item)
+        if not matched:
+            matched = []
+
+        missing = sorted(
+        tok for tok in dir_tokens
+            if len(tok) >= 3 and tok not in evidence_text_tokens
+        )[:4]
+
+        why: list[str] = []
+        if source == 'user_confirmed':
+            why.append('You confirmed this direction yourself — it leads all AVIS suggestions.')
+        elif source == 'cv_supported':
+            why.append('Listed explicitly among the target roles stated in your CV.')
+        else:
+            why.append('AVIS inferred this possibility from your CV evidence — not yet confirmed by you.')
+        if matched:
+            why.append('Overlaps your evidenced skills: ' + ', '.join(matched[:4]) + '.')
+        elif skills:
+            why.append('No direct skill overlap identified in your current evidence yet.')
+        exp_count = len(evidence.get('experience') or [])
+        proj_count = len(evidence.get('projects') or [])
+        if exp_count:
+            why.append(f'{exp_count} experience entr{"y" if exp_count == 1 else "ies"} and '
+                       f'{proj_count} project{"s" if proj_count != 1 else ""} in your CV provide background.')
+
+        ai_gaps = [str(g) for g in (interpretation.get('gaps') or [])][:3]
+        paths.append({
+            'label': clean,
+            'source': source,
+            'professional_level': professional_level or '',
+            'matched_skills': matched,
+            'strengths': matched,
+            'evidence_gaps': [f"No evidence yet for “{m}”." for m in missing],
+            'ai_gaps': ai_gaps,
+            'why': why,
+        })
+
+    conf = confirmation or {}
+    for target in conf.get('target_roles') or []:
+        add_path(str(target), 'user_confirmed')
+    if conf.get('primary_role'):
+        add_path(str(conf['primary_role']), 'user_confirmed')
+    if confirmed_intent:
+        add_path(confirmed_intent, 'user_confirmed')
+
+    for target in (evidence.get('target_roles') or []):
+        add_path(str(target), 'cv_supported')
+
+    for direction in directions or []:
+        add_path(str(direction), 'ai_inferred')
+
+    return paths[:6]
 
 
 @router.get("/career-intelligence")
@@ -114,6 +223,16 @@ async def get_career_intelligence(current_user=Depends(get_current_user), db: As
         signal = context['profile'].get('headline') or 'Professional identity'
         source = 'profile'
 
+    career_paths = build_career_paths(
+        confirmation,
+        confirmed,
+        directions,
+        evidence,
+        interpretation,
+        skills,
+        confirmed_level,
+    )
+
     return {
         'available': bool(evidence or confirmed),
         'career_signal': signal,
@@ -121,6 +240,7 @@ async def get_career_intelligence(current_user=Depends(get_current_user), db: As
         'strong_evidence': strengths[:8] or skills[:8],
         'next_gaps': gaps[:5],
         'summary': summary,
+        'career_paths': career_paths,
         'cv_evidence': evidence,
         'ai_interpretation': interpretation,
         'confirmed_user_intent': confirmed,

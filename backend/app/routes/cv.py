@@ -62,13 +62,16 @@ async def analyze_cv(
     if not extracted_text:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="This CV has no extracted text to analyze.")
 
-        profile = service.extract_profile_from_text(extracted_text)
+    profile = service.extract_profile_from_text(extracted_text)
 
     try:
         structured = validate_cv_analysis(analyze_cv_with_ejochat(extracted_text), profile)
     except (json.JSONDecodeError, ValueError) as exc:
         await service.mark_analysis_error(cv, str(exc))
-        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="Avis returned unparsable structured analysis. Please retry.") from exc
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=f"The AI response could not be parsed into a structured analysis ({str(exc)[:180]}). Please retry.",
+        ) from exc
     except RuntimeError as exc:
         await service.mark_analysis_error(cv, str(exc))
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Avis is temporarily unavailable. Please retry in a moment.") from exc

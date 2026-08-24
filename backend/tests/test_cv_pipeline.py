@@ -13,6 +13,60 @@ from app.services.cv_service import (
 )
 
 
+def test_build_career_paths_prioritizes_confirmation_over_inference():
+    from app.routes.ai import build_career_paths
+
+    paths = build_career_paths(
+        confirmation={'target_roles': ['AI Engineer'], 'primary_role': 'Backend Developer'},
+        confirmed_intent='AI Engineering',
+        directions=['Video Editor'],
+        evidence={
+            'skills': ['Python', 'FastAPI', 'PostgreSQL'],
+            'experience': ['Built APIs at ACME'],
+            'projects': ['Library API'],
+            'education': [],
+            'certifications': [],
+            'achievements': [],
+            'target_roles': ['API Developer'],
+        },
+        interpretation={'gaps': ['Limited production experience']},
+        skills=['Python', 'FastAPI', 'PostgreSQL'],
+        professional_level='junior',
+    )
+
+    labels = [p['label'] for p in paths]
+    sources = [p['source'] for p in paths]
+
+    # Confirmed items come first and are never displaced by inference.
+    assert labels[0] == 'AI Engineer'
+    assert all(sources[i] == 'user_confirmed' for i in range(3))
+    assert 'Video Editor' in labels
+    assert sources[labels.index('Video Editor')] == 'ai_inferred'
+    assert sources[labels.index('API Developer')] == 'cv_supported'
+
+    ai_path = next(p for p in paths if p['label'] == 'AI Engineer')
+    assert 'Python' in ai_path['strengths']
+    assert any('engineer' in g.lower() or 'evidence' in g.lower() for g in ai_path['evidence_gaps'])
+    assert 'Limited production experience' in ai_path['ai_gaps']
+    assert ai_path['professional_level'] == 'junior'
+
+
+def test_build_career_paths_dedupes_and_caps():
+    from app.routes.ai import build_career_paths
+
+    paths = build_career_paths(
+        confirmation={'target_roles': ['Nurse']},
+        confirmed_intent='nurse',
+        directions=['Nurse', 'Nurse', 'Tour Guide'] * 5,
+        evidence={'skills': [], 'experience': []},
+        interpretation={},
+        skills=[],
+        )
+    labels = [p['label'].lower() for p in paths]
+    assert len(paths) <= 6
+    assert len(labels) == len(set(labels))
+
+
 def _docx_bytes(text: str) -> bytes:
     document_xml = (
         '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
