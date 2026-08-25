@@ -10,10 +10,12 @@ import Chat from './pages/Chat';
 import Applications from './pages/Applications';
 import Alerts from './pages/Alerts';
 import Settings from './pages/Settings';
+import OAuthCallback from './pages/OAuthCallback';
 
 const routes = [
   { path: '/login', element: <Login />, protected: false },
   { path: '/register', element: <Register />, protected: false },
+  { path: '/oauth/callback', element: <OAuthCallback />, protected: false },
   { path: '/dashboard', element: <Dashboard />, protected: true },
   { path: '/profile', element: <Profile />, protected: true },
   { path: '/cv', element: <CV />, protected: true },
@@ -26,3 +28,4 @@ const routes = [
 ];
 
 export default routes;
+
