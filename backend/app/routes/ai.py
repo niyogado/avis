@@ -8,11 +8,11 @@ from app.database.session import get_db
 from app.dependencies.auth import get_current_user
 from app.schemas.ai_training import AITrainingCreate, AITrainingOut
 from app.services.chat_service import chat
-from app.services.cv_service import CVService, _tokenize
+from app.services.cv_service import CVService, _tokenize, coerce_skill_strings
 from app.services.profile_service import ProfileService
 from app.services.training_service import AITrainingService
 from app.services.career_hub_service import CareerHubService
-from app.services.opportunity_ai import enrich_opportunities, suggest_expansion_queries
+from app.services.opportunity_ai import ai_search_plan, enrich_opportunities, suggest_expansion_queries
 from app.services.domain_intelligence import build_search_queries, infer_user_domain
 from app.services.opportunity_service import resolve_routing, search_opportunities
 
@@ -74,8 +74,10 @@ def build_career_paths(
     interpretation — never invented.
     """
     skill_tokens_by_item: list[tuple[str, set]] = []
-    for skill in skills or []:
-        norm = (skill or '').strip()
+    # Skills may originate from AI-extracted JSON — guarantee plain strings so
+    # tuples/objects can never reach 'matched' arrays or str.join() below.
+    for skill in coerce_skill_strings(skills):
+        norm = skill.strip()
         if norm:
             skill_tokens_by_item.append((norm, _tokenize(norm)))
 
@@ -98,17 +100,20 @@ def build_career_paths(
             return
         seen.add(key)
 
-        dir_tokens = _tokenize(clean)
-        matched = [
+                # Role descriptors ("AI Engineer", "Data Engineer") must retain their
+        # keyword tokens for gap detection — _tokenize() strips role words as
+        # stopwords, so compute the label tokens without that filter here.
+        dir_tokens = {re.sub(r'[^a-z0-9]+', ' ', clean.lower()).strip() and t
+                      for t in re.split(r'[^a-z0-9]+', clean.lower()) if t}
+        matched = coerce_skill_strings([
             original for original, toks in skill_tokens_by_item
-        if toks & dir_tokens
-        ][:6]
+            if toks & dir_tokens
+        ])[:6]
         # A user-confirmed direction owns the candidate's confirmed skills
         # outright; otherwise only token-overlap skills count as evidence.
         if source == 'user_confirmed':
-            matched = list(skill_tokens_by_item)
-        if not matched:
-            matched = []
+            matched = coerce_skill_strings([original for original, _ in skill_tokens_by_item])
+        matched = matched or []
 
         missing = sorted(
         tok for tok in dir_tokens
@@ -137,8 +142,8 @@ def build_career_paths(
             'label': clean,
             'source': source,
             'professional_level': professional_level or '',
-            'matched_skills': matched,
-            'strengths': matched,
+            'matched_skills': coerce_skill_strings(matched),
+            'strengths': coerce_skill_strings(matched),
             'evidence_gaps': [f"No evidence yet for “{m}”." for m in missing],
             'ai_gaps': ai_gaps,
             'why': why,
@@ -175,10 +180,10 @@ async def get_career_intelligence(current_user=Depends(get_current_user), db: As
     if not context.get('cv') and not context.get('profile', {}).get('headline') and not confirmation:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No profile available yet. Upload a CV or complete your profile first.")
 
-    skills = evidence.get('skills') or context.get('skills') or []
-    strengths = interpretation.get('strengths') or skills[:5]
-    gaps = interpretation.get('gaps') or []
-    directions = interpretation.get('career_directions') or []
+    skills = coerce_skill_strings(evidence.get('skills') or context.get('skills') or [])
+    strengths = coerce_skill_strings(interpretation.get('strengths')) or skills[:5]
+    gaps = [str(g) for g in (interpretation.get('gaps') or []) if str(g).strip()]
+    directions = [str(d) for d in (interpretation.get('career_directions') or []) if str(d).strip()]
 
     # USER-CONFIRMED identity drives the signal when present.
     confirmed_primary = (confirmation or {}).get('primary_role') or ''
@@ -314,9 +319,18 @@ async def get_opportunities(
     safe_page = max(1, min(page, 8))
     queries_used: list[str] = []
     has_more = False
+    search_plan: dict = {}
 
     if safe_page == 1:
-        queries_used = build_search_queries(user_context)
+        # AI-driven adaptive search: the AI interprets the candidate's domain,
+        # level and goals, then emits targeted queries. Deterministic fallback
+        # is used automatically when the AI provider is unreachable.
+        search_plan = ai_search_plan(user_context)
+        plan_queries = search_plan.get('queries') or []
+        queries_used = [
+            (f"{item.get('query', '')} {item.get('location', '')}".strip()) for item in plan_queries
+        ]
+        queries_used = [q for q in queries_used if q]
         has_more = True  # expansion pages are always attempted next.
     else:
         # Expansion batches: adjacent titles/keywords from the candidate's field.
@@ -376,6 +390,7 @@ async def get_opportunities(
         'page': safe_page,
         'queries_used': queries_used,
         'has_more': has_more,
+        'search_plan': search_plan,
         'routing': {
             'intent': routing['intent'],
             'reason': routing['reason'],

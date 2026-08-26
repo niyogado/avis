@@ -1,11 +1,10 @@
-from fastapi import APIRouter, Depends, status
+from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
-from app.schemas.auth import UserCreate, UserOut,userLogin
+from app.schemas.auth import UserCreate, UserOut, userLogin
 from app.services.auth_service import AuthService
 from app.database.session import get_db
 from app.schemas.auth import Token
-from fastapi import HTTPException
-from fastapi import status
+from app.dependencies.auth import get_current_user
 from app.utils.jwt import create_access_token
 
 
@@ -29,3 +28,9 @@ async def login(payload: userLogin, db: AsyncSession = Depends(get_db)):
 
     access_token = create_access_token(subject=str(user.id))
     return {"access_token": access_token, "token_type": "bearer"}
+
+
+@router.get("/me", response_model=UserOut)
+async def me(current_user=Depends(get_current_user)):
+    """Return the authenticated user for the supplied bearer token."""
+    return current_user

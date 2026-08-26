@@ -193,7 +193,28 @@ def parse_ai_json_response(raw_response: str) -> dict[str, Any]:
             parsed = json.loads(salvaged)
     if not isinstance(parsed, dict):
         raise ValueError("Avis returned a non-object JSON response.")
-    return parsed
+    return _coerce_skill_lists(parsed)
+
+
+_SKILL_LIST_KEY_RE = re.compile(r'skill', re.I)
+
+
+def _coerce_skill_lists(node: Any, depth: int = 0) -> Any:
+    """Walk a parsed AI payload and force every *skill* list to plain strings."""
+    if depth > 6:
+        return node
+    if isinstance(node, dict):
+        return {
+            key: (
+                coerce_skill_strings(value)
+                if _SKILL_LIST_KEY_RE.search(str(key)) and isinstance(value, (list, tuple))
+                else _coerce_skill_lists(value, depth + 1)
+            )
+            for key, value in node.items()
+        }
+    if isinstance(node, list):
+        return [_coerce_skill_lists(item, depth + 1) for item in node]
+    return node
 
 
 # Avis truncates long generations mid-JSON (its proxy injects a
@@ -577,9 +598,57 @@ def _tokenize(value: str) -> set[str]:
     return tokens
 
 
+def coerce_skill_strings(items: Any) -> list[str]:
+    """Coerce any skill-collection shape into a list of PLAIN skill-name strings.
+
+    AI extractors occasionally emit malformed entries such as tuples
+    ``["Python", 0.95]`` or objects ``[{"name": "Python"}]``. Every element
+    returned here is guaranteed to be a plain ``str`` suitable for
+    ``matched``-style arrays (and safe for ``', '.join(...)``).
+    """
+    def _one(item: Any, depth: int = 0) -> str:
+        if depth > 3:
+            return ''
+        if isinstance(item, str):
+            return item.strip()
+        if isinstance(item, dict):
+            for key in ('name', 'skill', 'title', 'label', 'value', 'keyword'):
+                if key in item:
+                    return _one(item[key], depth + 1)
+            for value in item.values():  # fallback: first scalar value
+                coerced = _one(value, depth + 1)
+                if coerced:
+                    return coerced
+            return ''
+        if isinstance(item, (list, tuple, set)):
+            # ("Python", 0.95) -> "Python": the first positional element is the name.
+            for element in item:
+                coerced = _one(element, depth + 1)
+                if coerced:
+                    return coerced
+            return ''
+        if isinstance(item, (int, float)) and not isinstance(item, bool):
+            # A bare number is never a skill name.
+            return ''
+        return str(item).strip() if item is not None else ''
+
+    result: list[str] = []
+    seen: set[str] = set()
+    for entry in items or []:
+        name = _one(entry)
+        if name and name.lower() not in seen:
+            seen.add(name.lower())
+            result.append(name)
+    return result
+
+
 def match_profile_to_target(profile: dict[str, Any], job_title: str | None = None, job_description: str | None = None) -> dict[str, Any]:
-    profile_skills = {_normalize_keyword(skill) for skill in profile.get('skills', [])}
-    soft_skills = {_normalize_keyword(skill) for skill in profile.get('soft_skills', [])}
+    # Skill arrays may originate from AI-parsed JSON — guarantee plain strings
+    # before any set math, so tuples/objects can never leak through.
+    profile['skills'] = coerce_skill_strings(profile.get('skills'))
+    profile['soft_skills'] = coerce_skill_strings(profile.get('soft_skills'))
+    profile_skills = {_normalize_keyword(skill) for skill in profile['skills']}
+    soft_skills = {_normalize_keyword(skill) for skill in profile['soft_skills']}
     target_text = ' '.join(filter(None, [job_title or '', job_description or '']))
     target_tokens = _tokenize(target_text)
     skill_cands = set(target_tokens)
@@ -629,9 +698,9 @@ def match_profile_to_target(profile: dict[str, Any], job_title: str | None = Non
     analysis = {
         'job_title': job_title or '',
         'match_score': score,
-        'strong_areas': strong_areas,
-        'potential_gaps': missing_skills[:8] or ['No critical gaps detected from the provided job description.'],
-        'recommendations': recommendations,
+        'strong_areas': coerce_skill_strings(strong_areas),
+        'potential_gaps': coerce_skill_strings(missing_skills[:8]) or ['No critical gaps detected from the provided job description.'],
+        'recommendations': [str(r) for r in recommendations],
         'tailored_mini_cv': ' | '.join(filter(None, tailored_mini_cv)),
         'search_profile': build_search_profile(profile, job_title=job_title, job_description=job_description),
     }

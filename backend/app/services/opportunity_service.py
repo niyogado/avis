@@ -229,20 +229,35 @@ def search_opportunities(
             status["error"] = errors[0]
         provider_statuses.append(status)
 
-    # De-duplicate by application_url (or source_url) then title+company.
-    seen_urls: set[str] = set()
+            # De-duplicate by application_url (or source_url) then title+company.
+    # While de-duplicating, collect the distinct source names that offered the
+    # same opportunity so the frontend can show "Available from N sources".
+    seen_urls: dict[str, list[str]] = {}
+    kept_urls: set[str] = set()
     seen_titles: set[str] = set()
     unique: list[NormalizedOpportunity] = []
     for opp in raw_opportunities:
         dedup_key = opp.application_url or opp.source_url
         title_key = f"{opp.title}::{opp.company}".lower()
-        if dedup_key and dedup_key in seen_urls:
-            continue
+        if dedup_key:
+            sources = seen_urls.setdefault(dedup_key, [])
+            if opp.source and opp.source not in sources:
+                sources.append(opp.source)
+            # First occurrence of this URL: keep the card (with multi-source
+            # list). Subsequent dups of the same URL: skip the card but the
+            # accumulated sources remain on the kept card.
+            if dedup_key in kept_urls:
+                continue
+            kept_urls.add(dedup_key)
         if title_key in seen_titles:
             continue
-        seen_urls.add(dedup_key or "")
         seen_titles.add(title_key)
         unique.append(opp)
+        # Attach multi-source information to each kept opportunity.
+    for opp in unique:
+        dedup_key = opp.application_url or opp.source_url
+        if dedup_key and len(seen_urls.get(dedup_key, [])) > 1:
+            opp.sources_offered = seen_urls[dedup_key]
 
     matched: list[dict[str, Any]] = []
     rejected_out_of_domain = 0
@@ -294,11 +309,12 @@ def search_opportunities(
             "deadline": opp.deadline.isoformat() if opp.deadline else None,
             "salary": opp.salary,
             "company_logo": opp.company_logo,
-            "sector": opp.sector,
+                        "sector": opp.sector,
             "match_score": result.score,
             "match_band": result.band,
             "match_reasons": result.reasons,
             "match_components": result.components,
+            "sources_offered": (getattr(opp, "sources_offered", None) or None),
         })
 
     return {

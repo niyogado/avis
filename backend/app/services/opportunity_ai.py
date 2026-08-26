@@ -204,3 +204,76 @@ def _fallback_expansion(user_context: dict[str, Any]) -> list[str]:
         seen.add(key)
         cleaned.append(value)
     return cleaned
+
+def ai_search_plan(user_context):
+    """AI-driven adaptive career-search plan (never a fixed tech query)."""
+    brief = _candidate_brief(user_context)
+    prompt = (
+        "You are AVIS, an adaptive career-search agent. Candidate verified info ONLY:\n"
+        + brief +
+        "\n\nBuild a SEARCH PLAN. Do NOT assume a profession. Return ONLY JSON:\n"
+        '{"professions": ["..."], "interpretation": "...", "seniority": "entry|mid|senior|student/intern", '
+        '"queries": [{"query": "2-5 word keyword", "location": "optional"}], "emphasis": ["..."]}\n'
+        "Rules: 4-6 queries, clean 1-5 word keywords (no 'company','time','jobs'). "
+        "Students: internship/graduate/entry-level queries. Never add facts the candidate did not provide."
+    )
+    try:
+        raw = chat_with_ai(prompt)
+        parsed = json.loads(re.search(r"\{.*\}", raw, flags=re.S).group(0))
+        queries = []
+        seen = set()
+        for entry in (parsed.get("queries") or []):
+            meta = entry if isinstance(entry, dict) else {}
+            query = re.sub(r"\s+", " ", str(meta.get("query") or "")).strip()
+            if len(query) < 2 or query.lower() in seen or len(query.split()) > 6 or len(query) > 60:
+                continue
+            seen.add(query.lower())
+            queries.append({"query": query, "location": str(meta.get("location") or "").strip()[:40]})
+        if len(queries) < 2:
+            raise ValueError("not enough queries")
+        return {
+            "professions": _as_string_list(parsed.get("professions"))[:2],
+            "interpretation": str(parsed.get("interpretation") or "").strip()[:260],
+            "seniority": str(parsed.get("seniority") or "").strip()[:20],
+            "queries": queries[:6],
+            "skills": _as_string_list(parsed.get("emphasis"))[:8],
+            "ai_driven": True,
+        }
+    except Exception:
+        return _fallback_search_plan(user_context)
+
+
+def _fallback_search_plan(user_context):
+    """Deterministic plan when the AI provider is unreachable."""
+    from app.services.domain_intelligence import build_search_queries
+    confirmation = user_context.get("user_confirmation") or {}
+    intent = user_context.get("career_intent") or {}
+    evidence = user_context.get("cv_evidence") or {}
+    skills = evidence.get("skills") or user_context.get("skills") or []
+    profession = (confirmation.get("primary_role")
+                  or (confirmation.get("target_roles") or [None])[0]
+                  or intent.get("current_role") or "")
+    roles = _as_string_list(confirmation.get("target_roles")
+                            or intent.get("target_roles")
+                            or ([profession] if profession else []))
+    queries = []
+    for q in build_search_queries(user_context, limit=6):
+        if q and q.lower() not in {x["query"].lower() for x in queries}:
+            queries.append({"query": q, "location": ""})
+    return {
+        "professions": roles or ([profession] if profession else []),
+        "interpretation": (("Understood as " + profession) if profession
+                           else "Profile is still thin — AVIS is exploring broadly until you confirm your career intent."),
+        "seniority": str(confirmation.get("professional_level") or intent.get("professional_level") or "")[:20],
+        "queries": queries or [{"query": "jobs", "location": ""}],
+        "skills": skills[:8],
+        "ai_driven": False,
+    }
+
+
+def _as_string_list(value):
+    if value is None:
+        return []
+    if isinstance(value, str):
+        return [value.strip()] if value.strip() else []
+    return [str(item).strip() for item in value if str(item).strip() and item not in (None, "")]

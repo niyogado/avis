@@ -28,6 +28,10 @@ class NormalizedOpportunity(BaseModel):
     # Rich-card extras (all optional; never fabricated by AVIS).
     company_logo: Optional[str] = None
     sector: Optional[str] = None
+    # When the same opportunity (by application_url) was offered by more than
+    # one verified provider before de-duplication, this lists every source that
+    # offered it (e.g. ["Remotive", "Adzuna (RW)"]). Absent for single-source cards.
+    sources_offered: Optional[list] = None
 
 
 class ProviderStatus(BaseModel):
