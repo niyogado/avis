@@ -5,7 +5,7 @@ from app.config.settings import settings
 from app.routes import auth as auth_router
 from app.routes import profile as profile_router
 from app.routes import cv as cv_router
-from ai.router import router as ai_router
+from app.routes.ai import router as ai_router
 
 app = FastAPI(title=settings.APP_NAME, version="0.1.0")
 

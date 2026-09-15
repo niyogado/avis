@@ -1,6 +1,6 @@
 import React, { createContext, useContext, useEffect, useState } from 'react'
-import axios from 'axios'
 import { useNavigate } from 'react-router-dom'
+import apiClient from '../api/config'
 
 const AuthContext = createContext(null)
 
@@ -21,78 +21,69 @@ export function AuthProvider({ children }) {
 
   const fetchProfile = async (accessToken) => {
     try {
-      const profileRes = await axios.get('http://localhost:8000/api/profile/', {
+      const profileRes = await apiClient.get('/api/profile/', {
         headers: { Authorization: `Bearer ${accessToken}` },
       })
       setUser(profileRes.data)
       return profileRes.data
-    } catch (_) {
+    } catch (error) {
+      if (error.response?.status === 404) {
+        const fallbackName = [user?.first_name, user?.last_name].filter(Boolean).join(' ') || 'New user'
+        const fallbackProfile = {
+          first_name: user?.first_name || '',
+          last_name: user?.last_name || '',
+          full_name: fallbackName,
+          headline: '',
+          summary: '',
+          location: '',
+          phone: user?.phone || '',
+          avatar_url: '',
+        }
+
+        try {
+          const created = await apiClient.put('/api/profile/', fallbackProfile, {
+            headers: { Authorization: `Bearer ${accessToken}` },
+          })
+          setUser(created.data)
+          return created.data
+        } catch (_) {
+          setUser(null)
+          return null
+        }
+      }
+
       setUser(null)
       return null
     }
   }
 
   const login = async ({ email, password }) => {
-    // Backend expects exact JSON keys: { "email": "...", "password": "..." }
-    const res = await axios.post(
-      'http://localhost:8000/api/auth/login',
-      { email, password },
-      { headers: { 'Content-Type': 'application/json' } }
-    )
-
+    const res = await apiClient.post('/api/auth/login', { email, password })
     const access = res.data.access_token
     setToken(access)
 
-    await fetchProfile(access)
-
-    navigate('/')
+    const profile = await fetchProfile(access)
+    if (profile) {
+      navigate('/')
+    }
     return res.data
   }
 
   const register = async (userData) => {
-    // 1. Register
-    const regRes = await axios.post(
-      'http://localhost:8000/api/auth/register',
-      userData,
-      { headers: { 'Content-Type': 'application/json' } }
-    )
+    const regRes = await apiClient.post('/api/auth/register', userData)
 
-    // 2. Login automatically using exact email field
-    const loginRes = await axios.post(
-      'http://localhost:8000/api/auth/login',
-      { email: userData.email, password: userData.password },
-      { headers: { 'Content-Type': 'application/json' } }
-    )
+    const loginRes = await apiClient.post('/api/auth/login', {
+      email: userData.email,
+      password: userData.password,
+    })
 
     const access = loginRes.data.access_token
     setToken(access)
 
-    // 3. Update/Create profile info
-    const profilePayload = {
-      first_name: userData.first_name || '',
-      last_name: userData.last_name || '',
-      phone: userData.phone || '',
-      headline: '',
-      summary: '',
+    const profile = await fetchProfile(access)
+    if (profile) {
+      navigate('/')
     }
-
-    try {
-      const profileRes = await axios.post('http://localhost:8000/api/profile/', profilePayload, {
-        headers: { Authorization: `Bearer ${access}` },
-      })
-      setUser(profileRes.data)
-    } catch (err) {
-      try {
-        const profilePutRes = await axios.put('http://localhost:8000/api/profile/', profilePayload, {
-          headers: { Authorization: `Bearer ${access}` },
-        })
-        setUser(profilePutRes.data)
-      } catch (_) {
-        setUser(null)
-      }
-    }
-
-    navigate('/')
     return regRes.data
   }
 

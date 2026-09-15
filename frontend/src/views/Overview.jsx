@@ -1,96 +1,143 @@
-import React, { useState } from 'react'
-import { Link } from 'react-router-dom'
+import React, { useEffect, useState } from 'react'
+import { ArrowRight, Brain, BriefcaseBusiness } from 'lucide-react'
+import { useAuth } from '../contexts/AuthContext'
+import apiClient from '../api/config'
 
-function Card({ title, value, children }) {
-  return (
-    <div className="panel p-4 rounded-lg bg-[#191915] border border-[rgba(243,241,233,0.12)]">
-      <div className="text-sm text-[rgba(243,241,233,0.6)]">{title}</div>
-      <div className="text-2xl font-semibold mt-1 text-[#F3F1E9]">{value || '—'}</div>
-      {children}
-    </div>
-  )
-}
+export default function Overview() {
+  const { user } = useAuth()
+  const [intelligence, setIntelligence] = useState(null)
+  const [loading, setLoading] = useState(true)
 
-export default function Overview({ stats, applications = [], onAddTraining, onApply }) {
-  const [trainingInput, setTrainingInput] = useState('')
+  useEffect(() => {
+    let active = true
+    apiClient
+      .get('/api/ai/career-intelligence')
+      .then((res) => {
+        if (active) setIntelligence(res.data)
+      })
+      .catch(() => {
+        if (active) setIntelligence(null)
+      })
+      .finally(() => {
+        if (active) setLoading(false)
+      })
 
-  const handleSubmitTraining = (e) => {
-    e.preventDefault()
-    if (!trainingInput.trim()) return
-    if (onAddTraining) onAddTraining(trainingInput)
-    setTrainingInput('')
+    return () => {
+      active = false
+    }
+  }, [])
+
+  const firstName = user?.full_name?.split(' ')[0] || user?.first_name || 'there'
+  const insight = intelligence || {
+    career_signal: 'Professional identity',
+    strong_evidence: ['Profile data', 'Training notes'],
+    next_gaps: ['Add more verified evidence'],
+    summary: 'More evidence is needed before AVIS can rank your top opportunities with confidence.',
   }
 
+  const metrics = [
+    { label: 'Career signal', value: insight.career_signal || 'N/A' },
+    { label: 'Strong evidence', value: String(insight.strong_evidence?.length || 0) },
+    { label: 'Next gaps', value: String(insight.next_gaps?.length || 0) },
+    { label: 'Status', value: loading ? 'Loading' : 'Live' },
+  ]
+
+  const actions = [
+    { title: 'Add stronger evidence', detail: 'Capture a recent project, achievement, or training update so AVIS can refine your signal.' },
+    { title: 'Review your strongest path', detail: `The current strongest direction is ${insight.career_signal}.` },
+  ]
+
   return (
-    <div className="space-y-6 text-[#F3F1E9]">
-      <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-        <Card title="AI Knowledge Base" value={stats?.knowledgeBaseCount ?? '—'} />
-        <Card title="Active Job Matches" value={stats?.activeMatchesCount ?? '—'} />
-        <Card title="Top Match Score" value={stats?.topMatchScore ? `${stats.topMatchScore}%` : '—'} />
-        <Card title="CV Readiness" value={stats?.cvReadiness ? `${stats.cvReadiness}%` : '—'} />
+    <div className="page-shell">
+      <div className="section-head">
+        <div>
+          <div className="eyebrow">TODAY</div>
+          <h1>Good evening, {firstName}.</h1>
+        </div>
       </div>
 
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-        <div className="panel p-4 rounded-lg bg-[#191915] border border-[rgba(243,241,233,0.12)] flex flex-col justify-between">
-          <div>
-            <h3 className="text-lg font-semibold">Training & Twin Context</h3>
-            <textarea
-              value={trainingInput}
-              onChange={(e) => setTrainingInput(e.target.value)}
-              className="w-full mt-3 p-3 rounded bg-[#0E0E0C] border border-[rgba(243,241,233,0.12)] text-[#F3F1E9] focus:outline-none focus:border-[#D96A1C]"
-              rows={5}
-              placeholder="Add experience or training context for the AI..."
-            />
+      <div className="overview-grid">
+        {metrics.map((item) => (
+          <div key={item.label} className="panel metric-panel">
+            <div className="label">{item.label}</div>
+            <div className="value">{item.value}</div>
           </div>
-          <div className="mt-4 flex gap-2">
-            <button
-              onClick={handleSubmitTraining}
-              className="px-4 py-2 bg-[#D96A1C] text-white rounded hover:bg-[#c25e17] transition-colors"
-            >
-              Submit
-            </button>
-            <Link
-              to="/chat"
-              className="px-4 py-2 border border-[rgba(243,241,233,0.12)] rounded hover:bg-[rgba(243,241,233,0.05)] transition-colors inline-block text-center"
-            >
-              Open Chat
-            </Link>
+        ))}
+      </div>
+
+      <div className="panel hero-panel">
+        <div className="hero-copy">
+          <div className="greeting">
+            Your professional identity is evolving.
+            <strong>{insight.career_signal || 'More evidence is needed'} is the current signal.</strong>
+          </div>
+
+          <div className="meta-copy">
+            {insight.summary || 'AVIS is consolidating your CV, training, and approved knowledge into a coherent professional identity.'}
+          </div>
+
+          <div className="quick-actions">
+            <button type="button" className="primary-button">Review</button>
+            <button type="button" className="secondary-button">Improve evidence</button>
           </div>
         </div>
 
-        <div className="panel p-4 rounded-lg bg-[#191915] border border-[rgba(243,241,233,0.12)]">
-          <h3 className="text-lg font-semibold mb-3">Career Applications Stream</h3>
-          
-          {applications.length > 0 ? (
-            <div className="space-y-3">
-              {applications.map((app) => (
-                <div
-                  key={app.id || app.title}
-                  className="p-3 rounded border border-[rgba(243,241,233,0.12)] flex justify-between items-center bg-[#0E0E0C]"
-                >
-                  <div>
-                    <div className="font-semibold">{app.title} — {app.company}</div>
-                    <div className="text-sm text-[rgba(243,241,233,0.6)]">
-                      Matching skills: {Array.isArray(app.skills) ? app.skills.join(', ') : app.skills || 'N/A'}
-                    </div>
-                  </div>
-                  <div className="flex flex-col items-end">
-                    <div className="text-[#D96A1C] font-bold">{app.matchScore}%</div>
-                    <button
-                      onClick={() => onApply && onApply(app.id)}
-                      className="mt-2 px-3 py-1 rounded bg-[#D96A1C] text-white text-sm hover:bg-[#c25e17] transition-colors"
-                    >
-                      Apply Now
-                    </button>
-                  </div>
-                </div>
-              ))}
+        <div className="feature-block">
+          <div className="label">NEXT BEST ACTION</div>
+          <div>
+            <strong>{insight.next_gaps?.[0] || 'Capture a recent achievement'}</strong>
+            <p>{insight.summary || 'Add more verified evidence to sharpen the AI signal.'}</p>
+          </div>
+
+          <button type="button" className="text-button">
+            Improve evidence <ArrowRight size={14} />
+          </button>
+
+          <div className="detail"><BriefcaseBusiness size={14} /> {insight.strong_evidence?.length || 0} evidence categories are currently visible.</div>
+        </div>
+      </div>
+
+      <div className="split-panel">
+        <div className="panel">
+          <div className="mini-label">FOCUS</div>
+          {actions.map((action) => (
+            <div key={action.title} className="list-row">
+              <div>
+                <strong>{action.title}</strong>
+                <div>{action.detail}</div>
+              </div>
+              <button type="button" className="text-button small">
+                Review <ArrowRight size={12} />
+              </button>
             </div>
-          ) : (
-            <div className="text-sm text-[rgba(243,241,233,0.5)] py-8 text-center">
-              No active job application streams found.
+          ))}
+        </div>
+
+        <div className="panel">
+          <div className="mini-label">CAREER SIGNAL</div>
+          <div className="list-row">
+            <div>
+              <strong>{insight.career_signal}</strong>
+              <small>Strongest aligned path</small>
             </div>
-          )}
+            <span className="status-badge">Live</span>
+          </div>
+          {(insight.next_gaps || []).slice(0, 2).map((gap) => (
+            <div key={gap} className="list-row">
+              <div>
+                <strong>{gap}</strong>
+                <small>Current gap</small>
+              </div>
+              <span className="tag warning">Needs evidence</span>
+            </div>
+          ))}
+          <div className="list-row">
+            <div>
+              <strong>Profile quality</strong>
+              <small>Grounded in verified data</small>
+            </div>
+            <span className="tag soft">Updated</span>
+          </div>
         </div>
       </div>
     </div>

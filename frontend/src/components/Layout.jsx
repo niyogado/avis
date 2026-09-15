@@ -10,16 +10,16 @@ export default function Layout({ children }) {
   const isAuth = AUTH_PATHS.includes(pathname)
 
   return (
-    <div className="flex h-screen">
+    <div className="app-shell">
       {!isAuth && (
-        <aside className="sidebar fixed h-full" style={{ width: 260 }}>
+        <aside className="sidebar-panel">
           <Sidebar />
         </aside>
       )}
 
-      <main className="flex-1 p-6 flex flex-col" style={{ background: '#0E0E0C', marginLeft: isAuth ? 0 : 260 }}>
-        <Header />
-        <div className="mt-4 flex-1 overflow-auto">{children}</div>
+      <main className={`app-main ${isAuth ? 'auth-main' : ''}`}>
+        {!isAuth && <Header />}
+        <div className="page-content">{children}</div>
       </main>
     </div>
   )
